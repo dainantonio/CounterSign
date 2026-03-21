@@ -188,7 +188,7 @@ function ConditionsCard({ conditions, lsaNote }: { conditions: string[]; lsaNote
         <div className="space-y-3">
           <p className="text-[10px] font-black text-orange-700 uppercase tracking-widest">Send to LSA</p>
           <div className="p-4 bg-white rounded-xl border border-orange-100">
-            <p className="text-sm text-slate-600 leading-relaxed italic">"{lsaNote}"</p>
+            <p className="text-sm text-slate-600 leading-relaxed italic">&ldquo;{lsaNote}&rdquo;</p>
           </div>
           <button
             onClick={() => { navigator.clipboard.writeText(textToCopy); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
@@ -332,7 +332,7 @@ function LSANoteBlock({ note }: { note: string }) {
         <MessageSquareWarning className="w-3.5 h-3.5 text-slate-500" />
         <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Suggested Clarification Request</p>
       </div>
-      <p className="text-xs text-slate-600 leading-relaxed italic">"{note}"</p>
+      <p className="text-xs text-slate-600 leading-relaxed italic">&ldquo;{note}&rdquo;</p>
       <button
         onClick={() => { navigator.clipboard.writeText(note); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
         className="flex items-center gap-1.5 text-[10px] font-black text-slate-400 hover:text-slate-700 uppercase tracking-wider transition-colors"
@@ -684,7 +684,7 @@ export default function PricingAssistant() {
                       {activeJob.professional_justification && (
                         <div className="pt-6 border-t border-slate-100">
                           <div className="flex items-center gap-2 mb-3"><Sparkles className="w-3 h-3 text-amber-500" /><span className="text-[10px] font-black text-slate-900 uppercase tracking-widest">AI Justification</span></div>
-                          <p className="text-xs text-slate-500 leading-relaxed italic">"{activeJob.professional_justification}"</p>
+                          <p className="text-xs text-slate-500 leading-relaxed italic">&ldquo;{activeJob.professional_justification}&rdquo;</p>
                         </div>
                       )}
                     </section>
@@ -723,7 +723,7 @@ export default function PricingAssistant() {
                             </button>
                           </div>
                           <div className="max-w-xs bg-white/30 backdrop-blur-sm p-5 rounded-2xl border border-white/20">
-                            <p className="text-xs leading-relaxed text-slate-700 font-bold italic">"{activeJob.reasoning}"</p>
+                            <p className="text-xs leading-relaxed text-slate-700 font-bold italic">&ldquo;{activeJob.reasoning}&rdquo;</p>
                           </div>
                         </div>
                       </div>
