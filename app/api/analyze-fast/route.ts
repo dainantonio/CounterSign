@@ -5,8 +5,11 @@ import { getFastTriageInstruction, DEFAULT_SETTINGS, PricingSettings } from '@/l
 export async function POST(request: Request) {
   try {
     const { offerText, settings } = await request.json();
+
     const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-    if (!apiKey) return NextResponse.json({ error: 'GEMINI_API_KEY not configured.' }, { status: 500 });
+    if (!apiKey) {
+      return NextResponse.json({ error: 'GEMINI_API_KEY not configured.' }, { status: 500 });
+    }
 
     const genAI = new GoogleGenAI({ apiKey });
     const mergedSettings: PricingSettings = settings || DEFAULT_SETTINGS;
@@ -17,17 +20,27 @@ export async function POST(request: Request) {
       config: {
         systemInstruction: getFastTriageInstruction(mergedSettings),
         responseMimeType: 'application/json',
-        // Smaller token budget = faster response
-        maxOutputTokens: 600,
+        maxOutputTokens: 1500,
       },
     });
 
     const text = response.text;
-    if (!text) throw new Error('Empty response');
-    return NextResponse.json(JSON.parse(text));
+    if (!text) throw new Error('Empty response from Gemini');
+
+    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (parseErr: any) {
+      console.error('analyze-fast parse error. Raw:', text.slice(0, 500));
+      return NextResponse.json({ error: `JSON parse failed: ${parseErr.message}`, raw: text.slice(0, 500) }, { status: 500 });
+    }
+
+    return NextResponse.json(parsed);
   } catch (err: any) {
-    const msg = err?.message || err?.toString() || 'Analysis failed.';
-    console.error('analyze-fast error:', msg);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    const detail = err?.message || err?.toString() || 'Unknown error';
+    console.error('analyze-fast error:', detail);
+    return NextResponse.json({ error: detail }, { status: 500 });
   }
 }
