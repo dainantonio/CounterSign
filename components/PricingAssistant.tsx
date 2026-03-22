@@ -36,6 +36,9 @@ interface AnalysisResult {
   conditions_required: string[];
   recommended_fee: number;
   confidence: 'LOW' | 'MEDIUM' | 'HIGH';
+  estimated_fields: string[];
+  fee_data_quality: 'HIGH' | 'MEDIUM' | 'LOW';
+  fee_data_quality_note: string | null;
   reasoning: string;
   professional_justification?: string;
   response_message: string;
@@ -370,6 +373,13 @@ export default function PricingAssistant() {
     if (sj) { try { setJobs(JSON.parse(sj)); } catch {} }
     const ss = localStorage.getItem('notary_pricing_settings');
     if (ss) { try { setSettings(JSON.parse(ss)); } catch {} }
+    // PWA share target — grab shared text from URL params
+    const params = new URLSearchParams(window.location.search);
+    const sharedText = params.get('text') || params.get('title') || params.get('url');
+    if (sharedText) {
+      setOfferText(decodeURIComponent(sharedText));
+      window.history.replaceState({}, '', window.location.pathname);
+    }
     setMounted(true);
   }, []);
 
@@ -494,9 +504,20 @@ export default function PricingAssistant() {
                 placeholder="Paste job offer or rate inquiry..."
                 className="w-full p-4 text-sm bg-slate-50 border border-slate-200 rounded-2xl focus:ring-4 focus:ring-black/5 focus:bg-white focus:border-black outline-none transition-all resize-none h-28 shadow-inner"
               />
-              <button onClick={handleAnalyze} disabled={isAnalyzing || !offerText.trim()} className="absolute bottom-3 right-3 p-2.5 bg-black text-white rounded-xl disabled:opacity-50 shadow-lg shadow-black/20 hover:scale-105 active:scale-95 transition-all">
-                {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-              </button>
+              <div className="absolute bottom-3 right-3 flex items-center gap-1.5">
+                {!offerText.trim() && (
+                  <button
+                    onClick={async () => { try { const t = await navigator.clipboard.readText(); if (t) setOfferText(t); } catch {} }}
+                    className="p-2 bg-slate-200 text-slate-600 rounded-xl hover:bg-slate-300 transition-all"
+                    title="Paste from clipboard"
+                  >
+                    <Copy className="w-4 h-4" />
+                  </button>
+                )}
+                <button onClick={handleAnalyze} disabled={isAnalyzing || !offerText.trim()} className="p-2.5 bg-black text-white rounded-xl disabled:opacity-50 shadow-lg shadow-black/20 hover:scale-105 active:scale-95 transition-all">
+                  {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
 
             {jobs.length === 0 && !isAnalyzing && (
@@ -716,6 +737,12 @@ export default function PricingAssistant() {
                                 <span className="text-2xl font-display font-black text-slate-400">$</span>
                                 <p className="text-8xl font-display font-black text-slate-900 tracking-tighter leading-none">{activeJob.recommended_fee}</p>
                               </div>
+                              {activeJob.fee_data_quality !== 'HIGH' && activeJob.fee_data_quality_note && (
+                                <div className={`flex items-start gap-2 px-3 py-2 rounded-xl text-[11px] font-medium leading-snug ${activeJob.fee_data_quality === 'LOW' ? 'bg-amber-100 text-amber-800' : 'bg-white/60 text-slate-600'}`}>
+                                  <TriangleAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                  <span>Estimate: {activeJob.fee_data_quality_note}</span>
+                                </div>
+                              )}
                             </div>
                             <button onClick={() => copyToClipboard(`Fair Fee: $${activeJob.recommended_fee}\nReason: ${activeJob.professional_justification || activeJob.reasoning}`)} className="flex items-center gap-2 px-4 py-2 bg-white/50 hover:bg-white/80 backdrop-blur-sm rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-900 transition-all border border-white/30">
                               {copied ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
