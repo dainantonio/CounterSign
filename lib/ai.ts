@@ -77,6 +77,15 @@ DECISION:
   - CONDITIONAL_COUNTER if schedule conflict detected (signing + 75min > drop-off deadline)
 
 Return ONLY this JSON:
+
+RESPONSE MESSAGE TEMPLATES (use these to generate response_message):
+- ACCEPT: "${settings.templates.ACCEPT}"
+- COUNTER: Use "${settings.templates.COUNTER}" and replace [FEE] with recommended_fee
+- DECLINE: "${settings.templates.DECLINE}"
+- CONDITIONAL_COUNTER: Use "${settings.templates.CONDITIONAL_COUNTER}" and replace [CONDITIONS] and [FEE]
+- RATE_QUOTE: "Hi! Thanks for reaching out. My standard rates: Refinance from $${settings.baseFee + settings.refinanceFee}, Purchase from $${settings.baseFee + settings.purchaseFee}, General/Loan Mod from $${settings.baseFee}. Send me the job details and I will give you a firm number right away."
+
+JSON OUTPUT (return only this, no other text):
 {
   "message_type": "job_offer | pre_offer_inquiry",
   "is_urgent": false,
@@ -90,7 +99,7 @@ Return ONLY this JSON:
   "is_short_notice": false,
   "time_type": "standard | after_hours",
   "primary_action": "one sentence — the single most important thing to do right now",
-  "response_message": "ready-to-send professional reply using these templates — ACCEPT: '${settings.templates.ACCEPT}' COUNTER: replace [FEE] in '${settings.templates.COUNTER}' DECLINE: '${settings.templates.DECLINE}' RATE_QUOTE: replace values in '${settings.templates.RATE_INQUIRY.replace('[REFI_FEE]', String(settings.baseFee + settings.refinanceFee)).replace('[PURCHASE_FEE]', String(settings.baseFee + settings.purchaseFee)).replace('[BASE_FEE]', String(settings.baseFee))}'",
+  "response_message": "string — professional ready-to-send reply based on decision and templates above",
   "rate_inquiry_response": null,
   "fee_data_quality": "HIGH | MEDIUM | LOW",
   "fee_data_quality_note": null,
