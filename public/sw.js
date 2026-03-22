@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sigseal-v1';
+const CACHE_NAME = 'sigseal-v3';
 const STATIC_ASSETS = ['/', '/manifest.json', '/icon-1.png', '/icon-2.png'];
 
 self.addEventListener('install', (event) => {
@@ -19,14 +19,10 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-
-  // Never cache API calls
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(fetch(event.request));
     return;
   }
-
-  // Network-first for pages, cache fallback
   event.respondWith(
     fetch(event.request)
       .then((response) => {
