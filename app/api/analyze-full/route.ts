@@ -20,7 +20,6 @@ export async function POST(request: Request) {
       config: {
         systemInstruction: getFullAuditInstruction(mergedSettings),
         responseMimeType: 'application/json',
-        maxOutputTokens: 2000,
       },
     });
 
@@ -33,8 +32,11 @@ export async function POST(request: Request) {
     try {
       parsed = JSON.parse(cleaned);
     } catch (parseErr: any) {
-      console.error('analyze-full parse error. Raw:', text.slice(0, 500));
-      return NextResponse.json({ error: `JSON parse failed: ${parseErr.message}`, raw: text.slice(0, 500) }, { status: 500 });
+      console.error('analyze-full parse error. Raw response was:', text.slice(0, 800));
+      return NextResponse.json({
+        error: `JSON parse failed: ${parseErr.message}`,
+        raw: text.slice(0, 800),
+      }, { status: 500 });
     }
 
     return NextResponse.json(parsed);
