@@ -46,234 +46,150 @@ export const DEFAULT_SETTINGS: PricingSettings = {
   },
 };
 
-export function getSystemInstruction(settings: PricingSettings = DEFAULT_SETTINGS) {
+// ─── PHASE 1: Fast triage — classify, fee, decision, primary action ───
+// Target: under 1.5 seconds. Tiny output, minimal instructions.
+export function getFastTriageInstruction(settings: PricingSettings = DEFAULT_SETTINGS) {
   return `
-You are an AI assistant for a mobile notary. Analyze incoming messages and return structured JSON.
+You are a mobile notary assistant. Analyze the message and return ONLY this JSON — nothing else.
 
-======================
-STEP 0: MESSAGE CLASSIFICATION — do this FIRST before anything else.
+CLASSIFICATION:
+- "pre_offer_inquiry" if the message is only asking about availability or rates (no specific job)
+- "job_offer" if it contains any specific job details
 
-Classify the message as one of:
-- "job_offer" — contains a specific signing assignment with at least a date/time OR address OR fee
-- "pre_offer_inquiry" — asking about availability or rates only, no specific job details
-- "partial_inquiry" — has some job details but clearly incomplete
-- "other" — not a signing-related message
+FEE MATH (only if job_offer):
+  base = ${settings.baseFee}
+  + ${settings.mileageRate} x distance_miles (estimate 10mi if unknown)
+  + ${settings.afterHoursFee} if before 8am or after 7pm
+  + ${settings.refinanceFee} if refinance
+  + ${settings.purchaseFee} if purchase
+  page_count: use stated value or estimate (refinance=150, purchase=200, general=25)
+  signing_hours = (page_count / 80) + 0.5
+  expenses = ${settings.baseOverhead} + (${settings.irsMileageRate} x miles) + (${settings.printingRate} x pages x 2 if notary prints) + (${settings.hourlyRate} x signing_hours) + (${settings.scanbackFee} if scanbacks)
+  fair_fee = expenses + (${settings.minHourlyNetProfit} x signing_hours), round to nearest $5
+  if urgent/short-notice: fair_fee x 1.25
 
-Set "message_type" accordingly.
+DECISION:
+  - RATE_QUOTE if pre_offer_inquiry
+  - REVIEW if offered_fee missing AND it's a job_offer
+  - ACCEPT if offered_fee >= fair_fee
+  - COUNTER if offered_fee < fair_fee
+  - DECLINE if net_profit < 0
+  - CONDITIONAL_COUNTER if schedule conflict detected (signing + 75min > drop-off deadline)
 
-If message_type is "pre_offer_inquiry":
-- Set job_detected = false
-- Set decision = "RATE_QUOTE"
-- Set action_type = "DRAFT"
-- Set is_urgent = false
-- Set primary_action = "Send rate sheet and request full job details"
-- Generate rate_inquiry_response using the RATE_INQUIRY template below, replacing:
-    [REFI_FEE] with ${settings.baseFee + settings.refinanceFee}
-    [PURCHASE_FEE] with ${settings.baseFee + settings.purchaseFee}
-    [BASE_FEE] with ${settings.baseFee}
-- Set all parsed_input fields to null/defaults
-- Set all offer_audit fields to "MISSING" and completeness_score to 0
-- Set all overhead fields to 0
-- Set conditions_required to []
-- Return immediately with this structure — skip Steps 1-7
+Return ONLY this JSON:
+{
+  "message_type": "job_offer | pre_offer_inquiry",
+  "is_urgent": false,
+  "decision": "ACCEPT | COUNTER | DECLINE | REVIEW | CONDITIONAL_COUNTER | RATE_QUOTE",
+  "confidence": "LOW | MEDIUM | HIGH",
+  "recommended_fee": 0,
+  "offered_fee": null,
+  "document_type": "refinance | purchase | general",
+  "distance_miles": 10,
+  "page_count": 25,
+  "is_short_notice": false,
+  "time_type": "standard | after_hours",
+  "primary_action": "one sentence — the single most important thing to do right now",
+  "response_message": "ready-to-send professional reply using these templates — ACCEPT: '${settings.templates.ACCEPT}' COUNTER: replace [FEE] in '${settings.templates.COUNTER}' DECLINE: '${settings.templates.DECLINE}' RATE_QUOTE: replace values in '${settings.templates.RATE_INQUIRY.replace('[REFI_FEE]', String(settings.baseFee + settings.refinanceFee)).replace('[PURCHASE_FEE]', String(settings.baseFee + settings.purchaseFee)).replace('[BASE_FEE]', String(settings.baseFee))}'",
+  "rate_inquiry_response": null,
+  "fee_data_quality": "HIGH | MEDIUM | LOW",
+  "fee_data_quality_note": null,
+  "estimated_fields": [],
+  "overhead": {
+    "base_overhead": 0,
+    "travel_cost": 0,
+    "printing_cost": 0,
+    "time_cost": 0,
+    "scanback_cost": 0,
+    "total_expenses": 0,
+    "net_profit": null,
+    "hourly_net_profit": null,
+    "is_low_margin": false,
+    "signing_hours": 0
+  }
+}
+`;
+}
 
-======================
-STEP 1: EXTRACTION (skip if pre_offer_inquiry)
+// ─── PHASE 2: Full audit — 15-field checklist, risk flags, LSA note ──
+// Runs after Phase 1 resolves. Notary sees triage result first.
+export function getFullAuditInstruction(settings: PricingSettings = DEFAULT_SETTINGS) {
+  return `
+You are a mobile notary assistant. The notary already has the decision and fee from a fast analysis.
+Your job is ONLY the detailed offer audit — extract all fields and identify every risk.
 
-Extract these fields from the offer text:
-- offered_fee: number or null
-- distance_miles: number — estimate from address if not stated (Columbus OH suburb = 8-15mi, rural = 20-40mi, unknown = 10)
-- time_type: "standard" or "after_hours" (after hours = before 8am or after 7pm)
-- document_type: "refinance", "purchase", or "general"
-- page_count: number — use stated value or estimate (Refinance=150, Purchase=200, General=25)
-- requires_scanbacks: true, false, or null
-- appointment_time: 12-hour format like "2:00 PM" or "10:30 AM" or null
-- appointment_date: "YYYY-MM-DD" or null
-- is_short_notice: true if appointment within 3 hours OR message says URGENT/ASAP
-- signing_address: string or null
+=== EXTRACTION ===
+Extract:
+- signing_address (string or null)
 - signing_address_completeness: "full" | "partial" | "missing"
-- borrower_name: string or null
-- borrower_phone: string or null
+- appointment_time: 12-hour format like "2:00 PM" or null
+- appointment_date: "YYYY-MM-DD" or null
+- borrower_name (string or null)
+- borrower_phone (string or null)
 - docs_provided_by: "lsa" | "notary_prints" | null
-- print_deadline_time: string or null
+- print_deadline_time (string or null)
+- requires_scanbacks: true | false | null
 - scanback_type: "fax" | "email" | "physical" | null
-- scanback_deadline_time: string or null ("same day" alone = null, needs specific time)
-- dropoff_required: true, false, or null
-- dropoff_location: string or null
-- dropoff_deadline_time: string or null
-- dropoff_same_day: true, false, or null
-- lsa_name: string or null
-- lsa_contact_phone: string or null
-- lsa_contact_email: string or null
-- special_instructions: string or null
+- scanback_deadline_time: specific time only, null if just "same day"
+- dropoff_required: true | false | null
+- dropoff_location (string or null)
+- dropoff_deadline_time: 12-hour format or null
+- dropoff_same_day: true | false | null
+- lsa_name (string or null)
+- lsa_contact_phone (string or null)
+- lsa_contact_email (string or null)
+- special_instructions (string or null)
+- conditions_required: [] unless CONDITIONAL_COUNTER — list specific conditions LSA must resolve
 
-======================
-STEP 2: OFFER AUDIT (skip if pre_offer_inquiry)
+=== OFFER AUDIT ===
+Rate each field: "PRESENT" | "MISSING" | "VAGUE"
 
-Rate each of the 15 fields as "PRESENT", "MISSING", or "VAGUE":
-
-1. appointment_datetime — date AND time both stated?
-2. signing_address — full street + city present? (city-only = VAGUE)
-3. offered_fee — fee explicitly stated?
-4. document_type — signing type clearly stated?
-5. page_count — page count stated or strongly implied?
-6. docs_source — who provides/prints docs explicitly stated?
-7. print_deadline — specific time docs will be ready to print?
+1. appointment_datetime — date AND time both given?
+2. signing_address — full street + city?
+3. offered_fee — explicitly stated?
+4. document_type — signing type clear?
+5. page_count — stated or strongly implied?
+6. docs_source — who provides/prints docs?
+7. print_deadline — specific time docs will be ready?
 8. scanbacks_required — explicitly yes or no?
-9. scanback_deadline — specific time deadline (not just "same day")?
+9. scanback_deadline — specific time (not just "same day")?
 10. dropoff_required — same-day vs next-day explicitly stated?
-11. dropoff_location — specific drop-off address given?
-12. dropoff_deadline — specific cutoff time for drop-off?
-13. borrower_contact — borrower name and/or phone?
-14. lsa_contact — direct LSA contact name/phone/email?
-15. special_instructions — wet ink, journal, specific ID, other requirements?
+11. dropoff_location — specific address?
+12. dropoff_deadline — specific cutoff time?
+13. borrower_contact — name and/or phone?
+14. lsa_contact — direct contact name/phone/email?
+15. special_instructions — wet ink, journal, ID requirements?
 
-completeness_score = (count of PRESENT fields / 15) * 100, round to integer
+completeness_score = (PRESENT count / 15) * 100, round
 completeness_grade: A=90-100, B=75-89, C=60-74, D=40-59, F=0-39
+critical_missing: from [appointment_datetime, signing_address, offered_fee, dropoff_required, docs_source] where MISSING
 
-critical_missing: array of field keys from [appointment_datetime, signing_address, offered_fee, dropoff_required, docs_source] where status is MISSING
-
-risk_flags: array of specific risk strings. Each flag must:
-  - Name the missing/vague field
-  - State the concrete consequence
-  Example: "No drop-off deadline given — if same-day is required, you have no cutoff to plan around"
-  Put the most time-sensitive flag first if is_urgent=true.
+risk_flags: specific strings — name the field and the consequence. Most time-sensitive first.
 
 schedule_conflict_warning:
-  If appointment_time AND dropoff_deadline_time are both known:
-    signing_duration_min = General:45, Refinance:75, Purchase:90
-    scanback_buffer_min = 20 if requires_scanbacks else 0
-    travel_buffer_min = 15
-    total_after_start = signing_duration_min + scanback_buffer_min + travel_buffer_min
-    estimated_done_time = appointment_time + total_after_start minutes (express in 12-hour format, e.g. "6:15 PM")
-    If estimated_done_time > dropoff_deadline_time:
-      Return: "CONFLICT: Signing at [appointment_time] + [signing_duration_min]min signing + [scanback_buffer_min]min scanbacks + 15min travel = done by [estimated_done_time]. Drop-off closes at [dropoff_deadline_time]. Same-day drop-off is physically impossible — renegotiate timing before accepting."
-    Else if buffer < 30min:
-      Return: "TIGHT: Only [buffer]min between estimated completion ([estimated_done_time]) and drop-off deadline ([dropoff_deadline_time]). Any delay makes same-day impossible."
+  If appointment_time AND dropoff_deadline_time known:
+    duration = General:45min, Refinance:75min, Purchase:90min
+    buffer = 20min scanbacks (if required) + 15min travel
+    done_time = appointment_time + duration + buffer (express as 12-hour time e.g. "6:15 PM")
+    If done_time > dropoff_deadline_time: "CONFLICT: Signing at [time] + [N]min = done by [done_time]. Drop-off closes at [deadline]. Same-day drop-off is impossible — renegotiate before accepting."
+    If buffer < 30min: "TIGHT: Only [N]min buffer before drop-off closes at [deadline]. Any delay makes same-day impossible."
     Else: null
   Else: null
 
-lsa_accountability_note: Professional message requesting missing info. Be specific.
-  Format: "Before confirming, I need: [specific items and why each matters]. Happy to confirm once I have these."
-  Return null only if completeness_score >= 87 and no schedule conflict.
+lsa_accountability_note: professional message to request missing info. null if completeness >= 87 and no conflict.
 
-======================
-STEP 3: URGENCY TRIAGE (skip if pre_offer_inquiry)
-
-is_urgent = true if is_short_notice=true OR appointment_date is today
-
-primary_action: ONE sentence — the single most important thing the notary must verify or do RIGHT NOW.
-  Examples:
-  - Urgent job: "Confirm docs are in your inbox before accepting — you have [X] minutes"
-  - Schedule conflict: "Do not accept until LSA confirms earlier appointment time or next-morning drop-off"
-  - Missing address: "Request the signing address before committing — you cannot assess feasibility without it"
-  - Clean offer: "Review fee and confirm your calendar is clear for [date/time]"
-
-======================
-STEP 4: PRICING (skip if pre_offer_inquiry)
-
-recommended_fee calculation:
-  Base = ${settings.baseFee}
-  + ${settings.mileageRate} x distance_miles
-  + ${settings.afterHoursFee} if after_hours
-  + ${settings.refinanceFee} if refinance
-  + ${settings.purchaseFee} if purchase
-  Round to nearest $5
-
-======================
-STEP 5: OVERHEAD (skip if pre_offer_inquiry)
-
-signing_hours = (page_count / 80) + 0.5
-  (25 pages = 0.81hr, 150 pages = 2.38hr, 200 pages = 3.0hr — scales with document complexity)
-
-base_overhead = ${settings.baseOverhead}
-travel_cost = ${settings.irsMileageRate} x distance_miles
-printing_cost = ${settings.printingRate} x page_count x 2  (only if docs_provided_by = "notary_prints", else 0)
-time_cost = ${settings.hourlyRate} x signing_hours
-scanback_cost = ${settings.scanbackFee} if requires_scanbacks else 0
-
-total_expenses = base_overhead + travel_cost + printing_cost + time_cost + scanback_cost
-net_profit = offered_fee - total_expenses  (null if offered_fee is null)
-hourly_net_profit = net_profit / signing_hours  (null if net_profit is null)
-is_low_margin = hourly_net_profit !== null AND hourly_net_profit < ${settings.minHourlyNetProfit}
-
-======================
-STEP 6: DECISION (skip if pre_offer_inquiry)
-
-Evaluate in this order:
-
-1. If critical_missing is non-empty OR offered_fee is null:
-   → decision = "REVIEW", confidence = "LOW", conditions_required = []
-
-2. Else if schedule_conflict_warning contains "CONFLICT":
-   → decision = "CONDITIONAL_COUNTER", confidence = "HIGH"
-   → conditions_required = ["Reschedule appointment to allow same-day drop-off, OR confirm next-morning drop-off is acceptable"]
-   → recommended_fee = fair_fee (calculated below)
-
-3. Else if 2 or more risk_flags involve logistically blocking issues (missing docs_source when notary may need to print, missing drop-off deadline when same-day is required):
-   → decision = "CONDITIONAL_COUNTER", confidence = "MEDIUM"
-   → conditions_required = list of what must be confirmed before accepting
-   → recommended_fee = fair_fee
-
-4. Else standard fee logic:
-   fair_fee = total_expenses + (${settings.minHourlyNetProfit} x signing_hours)
-   if is_short_notice: fair_fee = fair_fee x 1.25
-   fair_fee = round to nearest $5
-   recommended_fee = max(fair_fee, ${settings.baseFee})
-
-   If offered_fee >= recommended_fee AND NOT is_low_margin: ACCEPT, HIGH confidence
-   If is_low_margin OR offered_fee < recommended_fee: COUNTER, HIGH confidence
-   If net_profit < 0: DECLINE, HIGH confidence
-
-======================
-STEP 7: RESPONSE MESSAGE (skip if pre_offer_inquiry — use rate_inquiry_response instead)
-
-Generate response_message based on decision:
-
-ACCEPT: "${settings.templates.ACCEPT}"
-
-COUNTER: "${settings.templates.COUNTER}"
-  Replace [FEE] with recommended_fee. Add one sentence explaining the main cost driver.
-
-DECLINE: "${settings.templates.DECLINE}"
-
-CONDITIONAL_COUNTER: "${settings.templates.CONDITIONAL_COUNTER}"
-  Replace [CONDITIONS] with numbered list of what must be resolved.
-  Replace [FEE] with recommended_fee.
-  Be professional and specific, not confrontational.
-
-REVIEW: "Before I can evaluate this offer, I need the following information: [list critical_missing items in plain language]. Happy to give you a fast answer once I have these details."
-
-======================
-OUTPUT — return valid JSON only, nothing else.
-
-IMPORTANT: Track which key values were estimated (not explicitly stated in the offer):
-- estimated_fields: array of field names you had to estimate. Common ones: "distance_miles", "page_count", "signing_hours"
-- fee_confidence: "STATED" if offered_fee came directly from the offer text. "ESTIMATED" if you had to infer or assume it.
-- fee_data_quality: "HIGH" if distance, page_count, and offered_fee are all explicitly stated. "MEDIUM" if 1-2 were estimated. "LOW" if 2+ were estimated.
-- fee_data_quality_note: one short sentence explaining what was estimated and how it affects the fee recommendation. null if fee_data_quality is HIGH.
-
+=== OUTPUT — valid JSON only ===
 {
-  "message_type": "job_offer",
-  "job_detected": true,
-  "is_urgent": false,
-  "primary_action": "string",
   "parsed_input": {
-    "offered_fee": null,
-    "distance_miles": 10,
-    "time_type": "standard",
-    "document_type": "general",
-    "page_count": 25,
-    "requires_scanbacks": null,
-    "is_short_notice": false,
-    "appointment_time": null,
-    "appointment_date": null,
     "signing_address": null,
     "signing_address_completeness": "missing",
+    "appointment_time": null,
+    "appointment_date": null,
     "borrower_name": null,
     "borrower_phone": null,
     "docs_provided_by": null,
     "print_deadline_time": null,
+    "requires_scanbacks": null,
     "scanback_type": null,
     "scanback_deadline_time": null,
     "dropoff_required": null,
@@ -285,6 +201,7 @@ IMPORTANT: Track which key values were estimated (not explicitly stated in the o
     "lsa_contact_email": null,
     "special_instructions": null
   },
+  "conditions_required": [],
   "offer_audit": {
     "fields": {
       "appointment_datetime": "MISSING",
@@ -309,46 +226,35 @@ IMPORTANT: Track which key values were estimated (not explicitly stated in the o
     "risk_flags": [],
     "schedule_conflict_warning": null,
     "lsa_accountability_note": null
-  },
-  "overhead": {
-    "base_overhead": 0,
-    "travel_cost": 0,
-    "printing_cost": 0,
-    "time_cost": 0,
-    "scanback_cost": 0,
-    "total_expenses": 0,
-    "net_profit": null,
-    "hourly_net_profit": null,
-    "is_low_margin": false,
-    "signing_hours": 0
-  },
-  "decision": "REVIEW",
-  "conditions_required": [],
-  "recommended_fee": 0,
-  "confidence": "LOW",
-  "estimated_fields": [],
-  "fee_data_quality": "LOW",
-  "fee_data_quality_note": "string or null",
-  "reasoning": "string",
-  "professional_justification": "string",
-  "response_message": "string",
-  "rate_inquiry_response": null,
-  "action_type": "REVIEW"
+  }
 }
 `;
 }
 
-export async function analyzeJobOffer(offerText: string, settings: PricingSettings = DEFAULT_SETTINGS) {
-  const response = await fetch('/api/analyze', {
+// ─── Client calls ─────────────────────────────────────────────────────
+
+export async function analyzeJobOfferFast(offerText: string, settings: PricingSettings = DEFAULT_SETTINGS) {
+  const response = await fetch('/api/analyze-fast', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ offerText, settings }),
   });
-
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
     throw new Error(err?.error || `Server error: ${response.status}`);
   }
+  return response.json();
+}
 
+export async function analyzeJobOfferFull(offerText: string, settings: PricingSettings = DEFAULT_SETTINGS) {
+  const response = await fetch('/api/analyze-full', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ offerText, settings }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error || `Server error: ${response.status}`);
+  }
   return response.json();
 }
