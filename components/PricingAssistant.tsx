@@ -424,20 +424,24 @@ export default function PricingAssistant() {
     if (ss) { try { freshSettings = JSON.parse(ss); setSettings(freshSettings); } catch {} }
     pendingSettingsRef.current = freshSettings;
 
-    // Check for PWA share target text in URL params
+    // Check for PWA share target text — stored in sessionStorage by /share page
+    const sessionText = sessionStorage.getItem('sigseal_shared_text');
+    console.log('[SigSeal] sessionStorage shared text:', sessionText);
+
+    // Also check URL params as fallback
     const params = new URLSearchParams(window.location.search);
     console.log('[SigSeal] URL search:', window.location.search);
     console.log('[SigSeal] All params:', Object.fromEntries(params.entries()));
-    
-    const rawText = params.get('text') || params.get('title') || params.get('url');
-    console.log('[SigSeal] Raw shared text:', rawText);
-    
+    const urlText = params.get('text') || params.get('title') || params.get('url');
+    console.log('[SigSeal] URL shared text:', urlText);
+
+    const rawText = sessionText || urlText;
     if (rawText) {
+      sessionStorage.removeItem('sigseal_shared_text');
       window.history.replaceState({}, '', window.location.pathname);
-      // Try decode, fall back to raw if already decoded
       let decoded = rawText;
       try { decoded = decodeURIComponent(rawText); } catch {}
-      console.log('[SigSeal] Decoded text:', decoded);
+      console.log('[SigSeal] Final shared text:', decoded);
       setPendingSharedText(decoded);
     }
     setMounted(true);
