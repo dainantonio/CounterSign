@@ -411,24 +411,36 @@ export default function PricingAssistant() {
 
   const activeJob = jobs.find(j => j.id === activeJobId) || null;
 
+  const [pendingSharedText, setPendingSharedText] = useState<string | null>(null);
+
   React.useEffect(() => {
     const sj = localStorage.getItem('notary_job_history');
     if (sj) { try { setJobs(JSON.parse(sj)); } catch {} }
     const ss = localStorage.getItem('notary_pricing_settings');
     if (ss) { try { setSettings(JSON.parse(ss)); } catch {} }
-    // PWA share target — grab shared text and auto-analyze
+    // PWA share target — store shared text, analyze in next effect
     const params = new URLSearchParams(window.location.search);
     const sharedText = params.get('text') || params.get('title') || params.get('url');
     if (sharedText) {
-      const decoded = decodeURIComponent(sharedText);
       window.history.replaceState({}, '', window.location.pathname);
-      setMounted(true);
-      // Auto-analyze after mount — slight delay so state is ready
-      setTimeout(() => handleAnalyzeText(decoded), 100);
-    } else {
-      setMounted(true);
+      setPendingSharedText(decodeURIComponent(sharedText));
     }
+    setMounted(true);
   }, []);
+
+  // Auto-analyze shared text once component is mounted and functions are ready
+  React.useEffect(() => {
+    if (mounted && pendingSharedText) {
+      setPendingSharedText(null);
+      // Read settings fresh from localStorage to avoid stale state
+      let freshSettings = settings;
+      try {
+        const ss = localStorage.getItem('notary_pricing_settings');
+        if (ss) freshSettings = JSON.parse(ss);
+      } catch {}
+      handleAnalyzeText(pendingSharedText, freshSettings);
+    }
+  }, [mounted, pendingSharedText]);
 
   const saveSettings = (s: PricingSettings) => {
     setSettings(s);
@@ -442,16 +454,16 @@ export default function PricingAssistant() {
     localStorage.setItem('notary_job_history', JSON.stringify(updated));
   };
 
-  const handleAnalyzeText = async (text: string) => {
+  const handleAnalyzeText = async (text: string, settingsOverride?: PricingSettings) => {
     if (!text.trim()) return;
+    const activeSettings = settingsOverride ?? settings;
     setIsAnalyzing(true);
     setIsAnalyzingPhase('fast');
     setError(null);
     setNotificationSent(false);
 
     try {
-      // ── Phase 1: Fast triage — decision + fee in ~1s ──
-      const fast = await analyzeJobOfferFast(text, settings);
+      const fast = await analyzeJobOfferFast(text, activeSettings);
       const jobId = Math.random().toString(36).substr(2, 9);
 
       const newJob: AnalysisResult = {
@@ -503,7 +515,7 @@ export default function PricingAssistant() {
 
       // ── Phase 2: Full audit — runs while user reads Phase 1 result ──
       if (fast.message_type !== 'pre_offer_inquiry') {
-        analyzeJobOfferFull(text, settings)
+        analyzeJobOfferFull(text, activeSettings)
           .then((full) => {
             setJobs(prev => {
               const updated = prev.map(j => j.id === jobId ? {
