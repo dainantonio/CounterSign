@@ -1,37 +1,17 @@
 {
   "name": "Signature Seal AI",
   "short_name": "SigSeal",
-  "description": "Mobile notary job offer analyzer — paste any offer for instant fee analysis",
+  "description": "Mobile notary job offer analyzer — instant fee analysis and offer audit",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#000000",
   "orientation": "portrait-primary",
   "icons": [
-    {
-      "src": "/icon-1.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/icon-1.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "/icon-2.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/icon-2.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
-    }
+    { "src": "/icon-1.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-1.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon-2.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-2.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "share_target": {
     "action": "/",
