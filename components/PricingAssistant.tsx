@@ -412,13 +412,19 @@ export default function PricingAssistant() {
   const activeJob = jobs.find(j => j.id === activeJobId) || null;
 
   const [pendingSharedText, setPendingSharedText] = useState<string | null>(null);
+  const pendingSettingsRef = React.useRef<PricingSettings>(DEFAULT_SETTINGS);
 
   React.useEffect(() => {
+    // Load persisted data
     const sj = localStorage.getItem('notary_job_history');
     if (sj) { try { setJobs(JSON.parse(sj)); } catch {} }
+
+    let freshSettings = DEFAULT_SETTINGS;
     const ss = localStorage.getItem('notary_pricing_settings');
-    if (ss) { try { setSettings(JSON.parse(ss)); } catch {} }
-    // PWA share target — store shared text, analyze in next effect
+    if (ss) { try { freshSettings = JSON.parse(ss); setSettings(freshSettings); } catch {} }
+    pendingSettingsRef.current = freshSettings;
+
+    // Check for PWA share target text in URL params
     const params = new URLSearchParams(window.location.search);
     const sharedText = params.get('text') || params.get('title') || params.get('url');
     if (sharedText) {
@@ -428,17 +434,11 @@ export default function PricingAssistant() {
     setMounted(true);
   }, []);
 
-  // Auto-analyze shared text once component is mounted and functions are ready
+  // Fire auto-analysis after mount when shared text is present
   React.useEffect(() => {
     if (mounted && pendingSharedText) {
       setPendingSharedText(null);
-      // Read settings fresh from localStorage to avoid stale state
-      let freshSettings = settings;
-      try {
-        const ss = localStorage.getItem('notary_pricing_settings');
-        if (ss) freshSettings = JSON.parse(ss);
-      } catch {}
-      handleAnalyzeText(pendingSharedText, freshSettings);
+      handleAnalyzeText(pendingSharedText, pendingSettingsRef.current);
     }
   }, [mounted, pendingSharedText]);
 
