@@ -78,7 +78,7 @@ interface AnalysisResult {
   };
 }
 
-type AppMode = 'Guide' | 'Agent (Draft)' | 'Agent (Auto)';
+type AppMode = 'Review' | 'Auto';
 
 // ─── Onboarding slides ────────────────────────────────────────────────
 const ONBOARDING_SLIDES = [
@@ -221,11 +221,10 @@ function CriticalAlerts({ audit }: { audit: OfferAudit }) {
 }
 
 // ─── Decision Hero ────────────────────────────────────────────────────
-function DecisionHero({ job, copied, onCopyFee, mode }: {
+function DecisionHero({ job, copied, onCopyFee }: {
   job: AnalysisResult;
   copied: boolean;
   onCopyFee: () => void;
-  mode: AppMode;
 }) {
   const ds = getDecisionStyles(job.decision);
   const confidenceLabel = { HIGH: 'High confidence', MEDIUM: 'Medium confidence', LOW: 'Low confidence' }[job.confidence];
@@ -454,7 +453,7 @@ export default function PricingAssistant() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [mode, setMode] = useState<AppMode>('Guide');
+  const [mode, setMode] = useState<AppMode>('Review');
   const [isEditingNotes, setIsEditingNotes] = useState(false);
   const [editedNotes, setEditedNotes] = useState('');
   const [isNotifying, setIsNotifying] = useState(false);
@@ -598,7 +597,7 @@ export default function PricingAssistant() {
           });
       }
 
-      if (fast.decision === 'ACCEPT' && fast.confidence === 'HIGH' && mode === 'Agent (Auto)') {
+      if (fast.decision === 'ACCEPT' && fast.confidence === 'HIGH' && mode === 'Auto') {
         handleNotify(newJob);
       }
     } catch (err: any) {
@@ -659,9 +658,8 @@ export default function PricingAssistant() {
         </div>
         <div className="flex items-center gap-2">
           <select value={mode} onChange={(e) => setMode(e.target.value as AppMode)} className="bg-slate-100 border-none rounded-xl px-3 py-1.5 text-xs font-bold text-slate-600 outline-none cursor-pointer hover:bg-slate-200">
-            <option value="Guide">Guide</option>
-            <option value="Agent (Draft)">Draft</option>
-            <option value="Agent (Auto)">Auto</option>
+            <option value="Review">Review</option>
+            <option value="Auto">Auto-Accept</option>
           </select>
           <button onClick={() => setShowOnboarding(true)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-700 transition-all text-xs font-bold">?</button>
           <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-700 transition-all">
@@ -807,7 +805,6 @@ export default function PricingAssistant() {
                     job={activeJob}
                     copied={copied}
                     onCopyFee={() => copyReply(activeJob.response_message)}
-                    mode={mode}
                   />
 
                   {/* ── SECTION 2: CRITICAL ALERTS — only what matters ── */}
@@ -820,7 +817,7 @@ export default function PricingAssistant() {
                     <div className="grid grid-cols-3 gap-3">
                       {(['ACCEPT', 'COUNTER', 'DECLINE'] as const).map((action) => {
                         const ds = getDecisionStyles(action);
-                        const isRec = (activeJob.decision === action || (action === 'COUNTER' && activeJob.decision === 'CONDITIONAL_COUNTER')) && mode !== 'Guide';
+                        const isRec = (activeJob.decision === action || (action === 'COUNTER' && activeJob.decision === 'CONDITIONAL_COUNTER'));
                         return (
                           <button key={action}
                             onClick={() => handleNotify({ ...activeJob, decision: action })}
@@ -932,6 +929,38 @@ export default function PricingAssistant() {
                 <button onClick={() => setShowSettings(false)} className="p-2 hover:bg-slate-100 rounded-lg"><X className="w-5 h-5 text-slate-400" /></button>
               </div>
               <div className="p-5 space-y-8 overflow-y-auto">
+                {/* Home ZIP — affects distance on every job */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2"><MapPin className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Your Location</h3></div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Home ZIP Code</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={5}
+                      placeholder="e.g. 43214"
+                      value={settings.homeZip || ''}
+                      onChange={(e) => setSettings({...settings, homeZip: e.target.value.replace(/\D/g,'')})}
+                      className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-bold"
+                    />
+                    <p className="text-[10px] text-slate-400 leading-relaxed">Used to estimate driving distance from your home to each signing. More accurate fee calculations.</p>
+                  </div>
+                </div>
+
+                {/* Auto-Accept mode explanation */}
+                <div className="space-y-3 pt-4 border-t border-slate-100">
+                  <div className="flex items-center gap-2"><Zap className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Mode</h3></div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${mode === 'Review' ? 'border-black bg-black text-white' : 'border-slate-100 bg-slate-50 text-slate-600'}`} onClick={() => setMode('Review')}>
+                      <p className="text-xs font-black mb-1">Review</p>
+                      <p className={`text-[10px] leading-relaxed ${mode === 'Review' ? 'text-white/70' : 'text-slate-400'}`}>You confirm every action manually. Recommended for most users.</p>
+                    </div>
+                    <div className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${mode === 'Auto' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-100 bg-slate-50 text-slate-600'}`} onClick={() => setMode('Auto')}>
+                      <p className="text-xs font-black mb-1">Auto-Accept</p>
+                      <p className={`text-[10px] leading-relaxed ${mode === 'Auto' ? 'text-emerald-600' : 'text-slate-400'}`}>Automatically logs ACCEPT when AI is HIGH confidence. You still manually Counter or Decline.</p>
+                    </div>
+                  </div>
+                </div>
                 <div className="space-y-4">
                   <div className="flex items-center gap-2"><DollarSign className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Fee Structure</h3></div>
                   <div className="grid grid-cols-2 gap-3">
