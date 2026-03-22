@@ -1,0 +1,31 @@
+import { NextResponse } from 'next/server';
+import { GoogleGenAI } from '@google/genai';
+import { getFullAuditInstruction, DEFAULT_SETTINGS, PricingSettings } from '@/lib/ai';
+
+export async function POST(request: Request) {
+  try {
+    const { offerText, settings } = await request.json();
+    const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+    if (!apiKey) return NextResponse.json({ error: 'GEMINI_API_KEY not configured.' }, { status: 500 });
+
+    const genAI = new GoogleGenAI({ apiKey });
+    const mergedSettings: PricingSettings = settings || DEFAULT_SETTINGS;
+
+    const response = await genAI.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [{ parts: [{ text: offerText }] }],
+      config: {
+        systemInstruction: getFullAuditInstruction(mergedSettings),
+        responseMimeType: 'application/json',
+        maxOutputTokens: 1200,
+      },
+    });
+
+    const text = response.text;
+    if (!text) throw new Error('Empty response');
+    return NextResponse.json(JSON.parse(text));
+  } catch (err: any) {
+    console.error('analyze-full error:', err);
+    return NextResponse.json({ error: err?.message || 'Audit failed.' }, { status: 500 });
+  }
+}
