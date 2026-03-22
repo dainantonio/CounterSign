@@ -14,6 +14,8 @@ export interface PricingSettings {
   minHourlyNetProfit: number;
   baseOverhead: number;
 
+  homeZip: string;
+
   templates: {
     ACCEPT: string;
     COUNTER: string;
@@ -37,6 +39,8 @@ export const DEFAULT_SETTINGS: PricingSettings = {
   minHourlyNetProfit: 30,
   baseOverhead: 15,
 
+  homeZip: '',
+
   templates: {
     ACCEPT: "I'm available and would be happy to help with this signing. Please send over the documents.",
     COUNTER: "Thank you for the opportunity. Based on the distance and document requirements, my standard professional fee for this assignment is $[FEE]. Please let me know if that works for you.",
@@ -59,7 +63,8 @@ CLASSIFY the message:
 - "job_offer" = contains any specific signing job details
 
 FEE MATH (job_offer only):
-base=${settings.baseFee}, mileage=${settings.mileageRate}x miles (assume 10mi if unknown), after_hours=+${settings.afterHoursFee}, refi=+${settings.refinanceFee}, purchase=+${settings.purchaseFee}
+base=${settings.baseFee}, mileage=${settings.mileageRate}x miles, after_hours=+${settings.afterHoursFee}, refi=+${settings.refinanceFee}, purchase=+${settings.purchaseFee}
+${settings.homeZip ? `Notary home ZIP: ${settings.homeZip}. Estimate one-way driving distance from this ZIP to the signing address. If no address given, assume 10mi.` : `Estimate distance: assume 10mi if unknown, 5-15mi for nearby suburb, 20-40mi for rural.`}
 pages: use stated or estimate (refi=150, purchase=200, general=25)
 hours = (pages/80)+0.5
 expenses = ${settings.baseOverhead} + (${settings.irsMileageRate}x miles) + (${settings.printingRate}x pages x2 if notary prints) + (${settings.hourlyRate}x hours) + (${settings.scanbackFee} if scanbacks)
