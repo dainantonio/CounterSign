@@ -26,7 +26,8 @@ export async function POST(request: Request) {
     if (!text) throw new Error('Empty response');
     return NextResponse.json(JSON.parse(text));
   } catch (err: any) {
-    console.error('analyze-fast error:', err);
-    return NextResponse.json({ error: err?.message || 'Analysis failed.' }, { status: 500 });
+    const msg = err?.message || err?.toString() || 'Analysis failed.';
+    console.error('analyze-fast error:', msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
