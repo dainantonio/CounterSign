@@ -426,10 +426,19 @@ export default function PricingAssistant() {
 
     // Check for PWA share target text in URL params
     const params = new URLSearchParams(window.location.search);
-    const sharedText = params.get('text') || params.get('title') || params.get('url');
-    if (sharedText) {
+    console.log('[SigSeal] URL search:', window.location.search);
+    console.log('[SigSeal] All params:', Object.fromEntries(params.entries()));
+    
+    const rawText = params.get('text') || params.get('title') || params.get('url');
+    console.log('[SigSeal] Raw shared text:', rawText);
+    
+    if (rawText) {
       window.history.replaceState({}, '', window.location.pathname);
-      setPendingSharedText(decodeURIComponent(sharedText));
+      // Try decode, fall back to raw if already decoded
+      let decoded = rawText;
+      try { decoded = decodeURIComponent(rawText); } catch {}
+      console.log('[SigSeal] Decoded text:', decoded);
+      setPendingSharedText(decoded);
     }
     setMounted(true);
   }, []);
@@ -472,7 +481,19 @@ export default function PricingAssistant() {
         status: 'new',
         auditLoading: fast.message_type !== 'pre_offer_inquiry',
         timestamp: Date.now(),
-        // Phase 2 fields default until audit arrives
+        // Build overhead object from flat Phase 1 fields
+        overhead: {
+          base_overhead: 0,
+          travel_cost: 0,
+          printing_cost: 0,
+          time_cost: 0,
+          scanback_cost: 0,
+          total_expenses: fast.total_expenses ?? 0,
+          net_profit: fast.net_profit ?? null,
+          hourly_net_profit: null,
+          is_low_margin: fast.net_profit != null && fast.net_profit < 0,
+          signing_hours: fast.signing_hours ?? 0,
+        },
         parsed_input: {
           offered_fee: fast.offered_fee ?? null,
           distance_miles: fast.distance_miles ?? 10,
