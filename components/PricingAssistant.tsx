@@ -9,7 +9,7 @@ import {
   ShieldAlert, ShieldX, TriangleAlert, BadgeCheck, CircleHelp,
   MessageSquareWarning, Zap as UrgentIcon, GitMerge, Send,
 } from 'lucide-react';
-import { analyzeJobOffer, DEFAULT_SETTINGS, PricingSettings } from '@/lib/ai';
+import { analyzeJobOfferFast, analyzeJobOfferFull, DEFAULT_SETTINGS, PricingSettings } from '@/lib/ai';
 
 // ─── Types ───────────────────────────────────────────────────────────
 type AuditStatus = 'PRESENT' | 'MISSING' | 'VAGUE';
@@ -45,6 +45,7 @@ interface AnalysisResult {
   rate_inquiry_response: string | null;
   action_type: 'AUTO_SEND' | 'DRAFT' | 'REVIEW';
   status: 'new' | 'reviewed' | 'completed';
+  auditLoading: boolean;
   timestamp: number;
   notes?: string;
   offer_audit: OfferAudit;
@@ -206,6 +207,47 @@ function ConditionsCard({ conditions, lsaNote }: { conditions: string[]; lsaNote
   );
 }
 
+// ─── Audit Skeleton ───────────────────────────────────────────────────
+function AuditSkeleton() {
+  return (
+    <section className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+      <div className="px-8 pt-8 pb-6 border-b border-slate-100">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 bg-slate-100 rounded-xl animate-pulse" />
+            <div className="space-y-2">
+              <div className="h-2.5 w-20 bg-slate-100 rounded animate-pulse" />
+              <div className="h-3 w-32 bg-slate-100 rounded animate-pulse" />
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="space-y-1 text-right">
+              <div className="h-2 w-8 bg-slate-100 rounded animate-pulse ml-auto" />
+              <div className="h-5 w-12 bg-slate-100 rounded animate-pulse" />
+            </div>
+            <div className="w-14 h-14 rounded-full bg-slate-100 animate-pulse" />
+          </div>
+        </div>
+        <div className="mt-5 h-1.5 bg-slate-100 rounded-full animate-pulse" />
+      </div>
+      <div className="px-8 py-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="flex items-center justify-between px-3 py-2.5 rounded-xl border border-slate-100 bg-slate-50/30">
+              <div className="h-3 bg-slate-100 rounded animate-pulse" style={{ width: `${55 + (i % 3) * 15}%` }} />
+              <div className="h-4 w-12 bg-slate-100 rounded animate-pulse" />
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 flex items-center gap-2 text-xs text-slate-400">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          <span>Running full audit...</span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 // ─── Offer Audit Panel ────────────────────────────────────────────────
 function OfferAuditPanel({ audit }: { audit: OfferAudit }) {
   const [expanded, setExpanded] = useState(false);
@@ -351,6 +393,7 @@ function LSANoteBlock({ note }: { note: string }) {
 export default function PricingAssistant() {
   const [offerText, setOfferText] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isAnalyzingPhase, setIsAnalyzingPhase] = useState<'idle' | 'fast' | 'full'>('idle');
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -373,14 +416,18 @@ export default function PricingAssistant() {
     if (sj) { try { setJobs(JSON.parse(sj)); } catch {} }
     const ss = localStorage.getItem('notary_pricing_settings');
     if (ss) { try { setSettings(JSON.parse(ss)); } catch {} }
-    // PWA share target — grab shared text from URL params
+    // PWA share target — grab shared text and auto-analyze
     const params = new URLSearchParams(window.location.search);
     const sharedText = params.get('text') || params.get('title') || params.get('url');
     if (sharedText) {
-      setOfferText(decodeURIComponent(sharedText));
+      const decoded = decodeURIComponent(sharedText);
       window.history.replaceState({}, '', window.location.pathname);
+      setMounted(true);
+      // Auto-analyze after mount — slight delay so state is ready
+      setTimeout(() => handleAnalyzeText(decoded), 100);
+    } else {
+      setMounted(true);
     }
-    setMounted(true);
   }, []);
 
   const saveSettings = (s: PricingSettings) => {
@@ -395,29 +442,99 @@ export default function PricingAssistant() {
     localStorage.setItem('notary_job_history', JSON.stringify(updated));
   };
 
-  const handleAnalyze = async () => {
-    if (!offerText.trim()) return;
+  const handleAnalyzeText = async (text: string) => {
+    if (!text.trim()) return;
     setIsAnalyzing(true);
+    setIsAnalyzingPhase('fast');
     setError(null);
     setNotificationSent(false);
+
     try {
-      const analysis = await analyzeJobOffer(offerText, settings);
-      const newJob: AnalysisResult = { ...analysis, id: Math.random().toString(36).substr(2, 9), status: 'new', timestamp: Date.now() };
+      // ── Phase 1: Fast triage — decision + fee in ~1s ──
+      const fast = await analyzeJobOfferFast(text, settings);
+      const jobId = Math.random().toString(36).substr(2, 9);
+
+      const newJob: AnalysisResult = {
+        ...fast,
+        id: jobId,
+        status: 'new',
+        auditLoading: fast.message_type !== 'pre_offer_inquiry',
+        timestamp: Date.now(),
+        // Phase 2 fields default until audit arrives
+        parsed_input: {
+          offered_fee: fast.offered_fee ?? null,
+          distance_miles: fast.distance_miles ?? 10,
+          time_type: fast.time_type ?? 'standard',
+          document_type: fast.document_type ?? 'general',
+          page_count: fast.page_count ?? 25,
+          requires_scanbacks: null,
+          is_short_notice: fast.is_short_notice ?? false,
+          appointment_time: null,
+          appointment_date: null,
+          signing_address: null,
+          dropoff_required: null,
+          dropoff_same_day: null,
+          lsa_name: null,
+        },
+        offer_audit: {
+          fields: Object.fromEntries(
+            ['appointment_datetime','signing_address','offered_fee','document_type','page_count',
+             'docs_source','print_deadline','scanbacks_required','scanback_deadline','dropoff_required',
+             'dropoff_location','dropoff_deadline','borrower_contact','lsa_contact','special_instructions']
+            .map(k => [k, 'MISSING'])
+          ) as any,
+          completeness_score: 0,
+          completeness_grade: 'F',
+          critical_missing: [],
+          risk_flags: [],
+          schedule_conflict_warning: null,
+          lsa_accountability_note: null,
+        },
+        conditions_required: [],
+      };
+
       const newJobs = [newJob, ...jobs].slice(0, 20);
       setJobs(newJobs);
-      setActiveJobId(newJob.id);
-      setEditedMessage(newJob.response_message);
+      setActiveJobId(jobId);
+      setEditedMessage(fast.response_message || '');
       localStorage.setItem('notary_job_history', JSON.stringify(newJobs));
       setOfferText('');
-      if (mode === 'Agent (Auto)' && newJob.decision === 'ACCEPT' && newJob.confidence === 'HIGH') {
+      setIsAnalyzingPhase('full');
+
+      // ── Phase 2: Full audit — runs while user reads Phase 1 result ──
+      if (fast.message_type !== 'pre_offer_inquiry') {
+        analyzeJobOfferFull(text, settings)
+          .then((full) => {
+            setJobs(prev => {
+              const updated = prev.map(j => j.id === jobId ? {
+                ...j,
+                auditLoading: false,
+                parsed_input: { ...j.parsed_input, ...full.parsed_input },
+                offer_audit: full.offer_audit,
+                conditions_required: full.conditions_required ?? [],
+              } : j);
+              localStorage.setItem('notary_job_history', JSON.stringify(updated));
+              return updated;
+            });
+          })
+          .catch(() => {
+            // Audit failed — just hide the skeleton, keep Phase 1 result
+            setJobs(prev => prev.map(j => j.id === jobId ? { ...j, auditLoading: false } : j));
+          });
+      }
+
+      if (fast.decision === 'ACCEPT' && fast.confidence === 'HIGH' && mode === 'Agent (Auto)') {
         handleNotify(newJob);
       }
     } catch (err: any) {
-      setError(err?.message || 'Failed to analyze the job offer. Please try again.');
+      setError(err?.message || 'Failed to analyze. Please try again.');
     } finally {
       setIsAnalyzing(false);
+      setIsAnalyzingPhase('idle');
     }
   };
+
+  const handleAnalyze = () => handleAnalyzeText(offerText);
 
   const updateJobStatus = (id: string, status: AnalysisResult['status']) => {
     const newJobs = jobs.map(j => j.id === id ? { ...j, status } : j);
@@ -526,6 +643,13 @@ export default function PricingAssistant() {
                   <Calculator className="w-6 h-6 text-slate-300" />
                 </div>
                 <p className="text-xs font-medium text-slate-400">Paste any offer or rate inquiry to begin.</p>
+              </div>
+            )}
+
+            {isAnalyzingPhase === 'fast' && (
+              <div className="flex items-center gap-2.5 px-4 py-3 bg-slate-50 rounded-2xl border border-slate-200">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400 shrink-0" />
+                <span className="text-xs text-slate-500 font-medium">Reading offer...</span>
               </div>
             )}
 
@@ -659,8 +783,11 @@ export default function PricingAssistant() {
                     </div>
                   </section>
 
-                  {/* Offer Audit */}
-                  {activeJob.offer_audit && <OfferAuditPanel audit={activeJob.offer_audit} />}
+                  {/* Offer Audit — skeleton during Phase 2, panel when ready */}
+                  {activeJob.auditLoading
+                    ? <AuditSkeleton />
+                    : activeJob.offer_audit && <OfferAuditPanel audit={activeJob.offer_audit} />
+                  }
 
                   {/* Conditions — shown before recommendation for CONDITIONAL_COUNTER */}
                   {isConditional && activeJob.conditions_required?.length > 0 && (
