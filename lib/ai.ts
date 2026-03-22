@@ -87,7 +87,7 @@ Extract these fields from the offer text:
 - document_type: "refinance", "purchase", or "general"
 - page_count: number — use stated value or estimate (Refinance=150, Purchase=200, General=25)
 - requires_scanbacks: true, false, or null
-- appointment_time: "HH:MM" 24hr format or null
+- appointment_time: 12-hour format like "2:00 PM" or "10:30 AM" or null
 - appointment_date: "YYYY-MM-DD" or null
 - is_short_notice: true if appointment within 3 hours OR message says URGENT/ASAP
 - signing_address: string or null
@@ -145,7 +145,7 @@ schedule_conflict_warning:
     scanback_buffer_min = 20 if requires_scanbacks else 0
     travel_buffer_min = 15
     total_after_start = signing_duration_min + scanback_buffer_min + travel_buffer_min
-    estimated_done_time = appointment_time + total_after_start minutes
+    estimated_done_time = appointment_time + total_after_start minutes (express in 12-hour format, e.g. "6:15 PM")
     If estimated_done_time > dropoff_deadline_time:
       Return: "CONFLICT: Signing at [appointment_time] + [signing_duration_min]min signing + [scanback_buffer_min]min scanbacks + 15min travel = done by [estimated_done_time]. Drop-off closes at [dropoff_deadline_time]. Same-day drop-off is physically impossible — renegotiate timing before accepting."
     Else if buffer < 30min:
@@ -247,6 +247,12 @@ REVIEW: "Before I can evaluate this offer, I need the following information: [li
 ======================
 OUTPUT — return valid JSON only, nothing else.
 
+IMPORTANT: Track which key values were estimated (not explicitly stated in the offer):
+- estimated_fields: array of field names you had to estimate. Common ones: "distance_miles", "page_count", "signing_hours"
+- fee_confidence: "STATED" if offered_fee came directly from the offer text. "ESTIMATED" if you had to infer or assume it.
+- fee_data_quality: "HIGH" if distance, page_count, and offered_fee are all explicitly stated. "MEDIUM" if 1-2 were estimated. "LOW" if 2+ were estimated.
+- fee_data_quality_note: one short sentence explaining what was estimated and how it affects the fee recommendation. null if fee_data_quality is HIGH.
+
 {
   "message_type": "job_offer",
   "job_detected": true,
@@ -320,6 +326,9 @@ OUTPUT — return valid JSON only, nothing else.
   "conditions_required": [],
   "recommended_fee": 0,
   "confidence": "LOW",
+  "estimated_fields": [],
+  "fee_data_quality": "LOW",
+  "fee_data_quality_note": "string or null",
   "reasoning": "string",
   "professional_justification": "string",
   "response_message": "string",
