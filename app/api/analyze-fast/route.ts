@@ -20,21 +20,24 @@ export async function POST(request: Request) {
       config: {
         systemInstruction: getFastTriageInstruction(mergedSettings),
         responseMimeType: 'application/json',
-        maxOutputTokens: 1500,
       },
     });
 
     const text = response.text;
     if (!text) throw new Error('Empty response from Gemini');
 
+    // Strip markdown fences if model wrapped the JSON
     const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
 
     let parsed: any;
     try {
       parsed = JSON.parse(cleaned);
     } catch (parseErr: any) {
-      console.error('analyze-fast parse error. Raw:', text.slice(0, 500));
-      return NextResponse.json({ error: `JSON parse failed: ${parseErr.message}`, raw: text.slice(0, 500) }, { status: 500 });
+      console.error('analyze-fast parse error. Raw response was:', text.slice(0, 800));
+      return NextResponse.json({
+        error: `JSON parse failed: ${parseErr.message}`,
+        raw: text.slice(0, 800),
+      }, { status: 500 });
     }
 
     return NextResponse.json(parsed);
