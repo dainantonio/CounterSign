@@ -76,7 +76,6 @@ RATE_QUOTE: "Hi! My rates: Refinance from $${refiRate}, Purchase from $${purchas
 Return this JSON with real values filled in:
 {"message_type":"job_offer","is_urgent":false,"decision":"REVIEW","confidence":"LOW","recommended_fee":0,"offered_fee":null,"document_type":"general","distance_miles":10,"page_count":25,"is_short_notice":false,"time_type":"standard","primary_action":"string","response_message":"string","rate_inquiry_response":null,"fee_data_quality":"LOW","fee_data_quality_note":null,"estimated_fields":[],"net_profit":null,"total_expenses":0,"signing_hours":0}`;
 }
-}
 
 // ─── PHASE 2: Full audit — 15-field checklist, risk flags, LSA note ──
 // Runs after Phase 1 resolves. Notary sees triage result first.
