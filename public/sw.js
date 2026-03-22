@@ -1,5 +1,5 @@
 const CACHE_NAME = 'sigseal-v1';
-const STATIC_ASSETS = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png'];
+const STATIC_ASSETS = ['/', '/manifest.json', '/icon-1.png', '/icon-2.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
