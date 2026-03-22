@@ -47,77 +47,35 @@ export const DEFAULT_SETTINGS: PricingSettings = {
 };
 
 // ─── PHASE 1: Fast triage — classify, fee, decision, primary action ───
-// Target: under 1.5 seconds. Tiny output, minimal instructions.
+// Target: under 1.5 seconds. Minimal output — only what notary needs to act immediately.
 export function getFastTriageInstruction(settings: PricingSettings = DEFAULT_SETTINGS) {
-  return `
-You are a mobile notary assistant. Analyze the message and return ONLY this JSON — nothing else.
+  const refiRate = settings.baseFee + settings.refinanceFee;
+  const purchaseRate = settings.baseFee + settings.purchaseFee;
 
-CLASSIFICATION:
-- "pre_offer_inquiry" if the message is only asking about availability or rates (no specific job)
-- "job_offer" if it contains any specific job details
+  return `You are a mobile notary assistant. Analyze the message and return ONLY valid JSON — no other text, no markdown, no explanation.
 
-FEE MATH (only if job_offer):
-  base = ${settings.baseFee}
-  + ${settings.mileageRate} x distance_miles (estimate 10mi if unknown)
-  + ${settings.afterHoursFee} if before 8am or after 7pm
-  + ${settings.refinanceFee} if refinance
-  + ${settings.purchaseFee} if purchase
-  page_count: use stated value or estimate (refinance=150, purchase=200, general=25)
-  signing_hours = (page_count / 80) + 0.5
-  expenses = ${settings.baseOverhead} + (${settings.irsMileageRate} x miles) + (${settings.printingRate} x pages x 2 if notary prints) + (${settings.hourlyRate} x signing_hours) + (${settings.scanbackFee} if scanbacks)
-  fair_fee = expenses + (${settings.minHourlyNetProfit} x signing_hours), round to nearest $5
-  if urgent/short-notice: fair_fee x 1.25
+CLASSIFY the message:
+- "pre_offer_inquiry" = asking about availability or rates only, no specific job details
+- "job_offer" = contains any specific signing job details
 
-DECISION:
-  - RATE_QUOTE if pre_offer_inquiry
-  - REVIEW if offered_fee missing AND it's a job_offer
-  - ACCEPT if offered_fee >= fair_fee
-  - COUNTER if offered_fee < fair_fee
-  - DECLINE if net_profit < 0
-  - CONDITIONAL_COUNTER if schedule conflict detected (signing + 75min > drop-off deadline)
+FEE MATH (job_offer only):
+base=${settings.baseFee}, mileage=${settings.mileageRate}x miles (assume 10mi if unknown), after_hours=+${settings.afterHoursFee}, refi=+${settings.refinanceFee}, purchase=+${settings.purchaseFee}
+pages: use stated or estimate (refi=150, purchase=200, general=25)
+hours = (pages/80)+0.5
+expenses = ${settings.baseOverhead} + (${settings.irsMileageRate}x miles) + (${settings.printingRate}x pages x2 if notary prints) + (${settings.hourlyRate}x hours) + (${settings.scanbackFee} if scanbacks)
+fair_fee = expenses + (${settings.minHourlyNetProfit}x hours), round to $5. If urgent x1.25.
 
-Return ONLY this JSON:
+DECISION: RATE_QUOTE if inquiry. REVIEW if no fee stated. ACCEPT if offered>=fair. COUNTER if offered<fair. DECLINE if net<0. CONDITIONAL_COUNTER if drop-off deadline conflict.
 
-RESPONSE MESSAGE TEMPLATES (use these to generate response_message):
-- ACCEPT: "${settings.templates.ACCEPT}"
-- COUNTER: Use "${settings.templates.COUNTER}" and replace [FEE] with recommended_fee
-- DECLINE: "${settings.templates.DECLINE}"
-- CONDITIONAL_COUNTER: Use "${settings.templates.CONDITIONAL_COUNTER}" and replace [CONDITIONS] and [FEE]
-- RATE_QUOTE: "Hi! Thanks for reaching out. My standard rates: Refinance from $${settings.baseFee + settings.refinanceFee}, Purchase from $${settings.baseFee + settings.purchaseFee}, General/Loan Mod from $${settings.baseFee}. Send me the job details and I will give you a firm number right away."
+TEMPLATES:
+ACCEPT: "${settings.templates.ACCEPT}"
+COUNTER: "${settings.templates.COUNTER}" (replace [FEE])
+DECLINE: "${settings.templates.DECLINE}"
+RATE_QUOTE: "Hi! My rates: Refinance from $${refiRate}, Purchase from $${purchaseRate}, General from $${settings.baseFee}. Send job details for a firm quote."
 
-JSON OUTPUT (return only this, no other text):
-{
-  "message_type": "job_offer | pre_offer_inquiry",
-  "is_urgent": false,
-  "decision": "ACCEPT | COUNTER | DECLINE | REVIEW | CONDITIONAL_COUNTER | RATE_QUOTE",
-  "confidence": "LOW | MEDIUM | HIGH",
-  "recommended_fee": 0,
-  "offered_fee": null,
-  "document_type": "refinance | purchase | general",
-  "distance_miles": 10,
-  "page_count": 25,
-  "is_short_notice": false,
-  "time_type": "standard | after_hours",
-  "primary_action": "one sentence — the single most important thing to do right now",
-  "response_message": "string — professional ready-to-send reply based on decision and templates above",
-  "rate_inquiry_response": null,
-  "fee_data_quality": "HIGH | MEDIUM | LOW",
-  "fee_data_quality_note": null,
-  "estimated_fields": [],
-  "overhead": {
-    "base_overhead": 0,
-    "travel_cost": 0,
-    "printing_cost": 0,
-    "time_cost": 0,
-    "scanback_cost": 0,
-    "total_expenses": 0,
-    "net_profit": null,
-    "hourly_net_profit": null,
-    "is_low_margin": false,
-    "signing_hours": 0
-  }
+Return this JSON with real values filled in:
+{"message_type":"job_offer","is_urgent":false,"decision":"REVIEW","confidence":"LOW","recommended_fee":0,"offered_fee":null,"document_type":"general","distance_miles":10,"page_count":25,"is_short_notice":false,"time_type":"standard","primary_action":"string","response_message":"string","rate_inquiry_response":null,"fee_data_quality":"LOW","fee_data_quality_note":null,"estimated_fields":[],"net_profit":null,"total_expenses":0,"signing_hours":0}`;
 }
-`;
 }
 
 // ─── PHASE 2: Full audit — 15-field checklist, risk flags, LSA note ──
