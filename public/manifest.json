@@ -2,7 +2,7 @@
   "name": "Signature Seal AI",
   "short_name": "SigSeal",
   "description": "Mobile notary job offer analyzer — paste any offer for instant fee analysis",
-  "start_url": "/?source=pwa",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#000000",
@@ -34,23 +34,13 @@
     }
   ],
   "share_target": {
-    "action": "/",
+    "action": "/share",
     "method": "GET",
-    "enctype": "application/x-www-form-urlencoded",
     "params": {
       "title": "title",
       "text": "text",
       "url": "url"
     }
   },
-  "categories": ["business", "productivity"],
-  "shortcuts": [
-    {
-      "name": "Analyze Offer",
-      "short_name": "Analyze",
-      "description": "Paste and analyze a new signing offer",
-      "url": "/?action=new",
-      "icons": [{ "src": "/icon-1.png", "sizes": "192x192" }]
-    }
-  ]
+  "categories": ["business", "productivity"]
 }
