@@ -79,6 +79,13 @@ interface AnalysisResult {
 }
 
 type AppMode = 'Review' | 'Auto';
+type ErrorAction = 'analyze' | 'notify';
+
+interface AppError {
+  message: string;
+  detail?: string;
+  action?: ErrorAction;
+}
 
 // ─── Onboarding slides ────────────────────────────────────────────────
 const ONBOARDING_SLIDES = [
@@ -451,7 +458,7 @@ export default function PricingAssistant() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isAnalyzingPhase, setIsAnalyzingPhase] = useState<'idle' | 'fast' | 'full'>('idle');
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<AppError | null>(null);
   const [copied, setCopied] = useState(false);
   const [mode, setMode] = useState<AppMode>('Review');
   const [isEditingNotes, setIsEditingNotes] = useState(false);
@@ -601,7 +608,11 @@ export default function PricingAssistant() {
         handleNotify(newJob);
       }
     } catch (err: any) {
-      setError(err?.message || 'Failed to analyze. Please try again.');
+      setError({
+        message: 'Failed to analyze this offer.',
+        detail: err?.message || 'Unknown error from analysis service.',
+        action: 'analyze',
+      });
     } finally {
       setIsAnalyzing(false);
       setIsAnalyzingPhase('idle');
@@ -609,6 +620,17 @@ export default function PricingAssistant() {
   };
 
   const handleAnalyze = () => handleAnalyzeText(offerText);
+  const retryLastAction = () => {
+    if (!error?.action) return;
+    setError(null);
+    if (error.action === 'analyze') {
+      handleAnalyze();
+      return;
+    }
+    if (error.action === 'notify' && activeJob) {
+      handleNotify(activeJob);
+    }
+  };
 
   const updateJobStatus = (id: string, status: AnalysisResult['status']) => {
     const newJobs = jobs.map(j => j.id === id ? { ...j, status } : j);
@@ -621,8 +643,21 @@ export default function PricingAssistant() {
     try {
       const response = await fetch('/api/notify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(job) });
       if (response.ok) { setNotificationSent(true); updateJobStatus(job.id, 'completed'); }
-      else setError('Failed to send notification.');
-    } catch { setError('An error occurred.'); }
+      else {
+        const body = await response.json().catch(() => ({}));
+        setError({
+          message: 'Could not log this decision.',
+          detail: body?.error ? JSON.stringify(body.error) : `Request failed with status ${response.status}.`,
+          action: 'notify',
+        });
+      }
+    } catch (err: any) {
+      setError({
+        message: 'Could not log this decision.',
+        detail: err?.message || 'Unknown network error.',
+        action: 'notify',
+      });
+    }
     finally { setIsNotifying(false); }
   };
 
@@ -661,8 +696,8 @@ export default function PricingAssistant() {
             <option value="Review">Review</option>
             <option value="Auto">Auto-Accept</option>
           </select>
-          <button onClick={() => setShowOnboarding(true)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-700 transition-all text-xs font-bold">?</button>
-          <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-700 transition-all">
+          <button aria-label="Open onboarding help" title="Open onboarding help" onClick={() => setShowOnboarding(true)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-700 transition-all text-xs font-bold">?</button>
+          <button aria-label="Open settings" title="Open settings" onClick={() => setShowSettings(true)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-700 transition-all">
             <SettingsIcon className="w-4 h-4" />
           </button>
         </div>
@@ -673,7 +708,7 @@ export default function PricingAssistant() {
         <aside className={`absolute inset-0 z-20 bg-white border-r border-slate-200 flex flex-col transition-transform duration-300 lg:relative lg:translate-x-0 lg:w-72 xl:w-80 ${activeJobId ? '-translate-x-full lg:translate-x-0' : 'translate-x-0'}`}>
           <div className="p-3 border-b border-slate-100 flex items-center justify-between">
             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Jobs</span>
-            <button onClick={() => { setJobs([]); localStorage.removeItem('notary_job_history'); }} className="p-1 hover:bg-rose-50 text-slate-300 hover:text-rose-500 rounded-lg transition-all">
+            <button aria-label="Clear all jobs" title="Clear all jobs" onClick={() => { setJobs([]); localStorage.removeItem('notary_job_history'); }} className="p-1 hover:bg-rose-50 text-slate-300 hover:text-rose-500 rounded-lg transition-all">
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -690,12 +725,12 @@ export default function PricingAssistant() {
               />
               <div className="absolute bottom-2.5 right-2.5 flex items-center gap-1.5">
                 {!offerText.trim() && (
-                  <button onClick={async () => { try { const t = await navigator.clipboard.readText(); if (t) setOfferText(t); } catch {} }}
+                  <button aria-label="Paste from clipboard" onClick={async () => { try { const t = await navigator.clipboard.readText(); if (t) setOfferText(t); } catch {} }}
                     className="p-1.5 bg-slate-200 text-slate-600 rounded-lg hover:bg-slate-300 transition-all" title="Paste from clipboard">
                     <Copy className="w-3.5 h-3.5" />
                   </button>
                 )}
-                <button onClick={handleAnalyze} disabled={isAnalyzing || !offerText.trim()}
+                <button aria-label="Analyze offer" onClick={handleAnalyze} disabled={isAnalyzing || !offerText.trim()}
                   className="p-2 bg-black text-white rounded-xl disabled:opacity-50 hover:scale-105 active:scale-95 transition-all">
                   {isAnalyzing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
                 </button>
@@ -778,8 +813,23 @@ export default function PricingAssistant() {
               </button>
 
               {error && (
-                <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-3 text-rose-700 text-xs font-medium">
-                  <AlertCircle className="w-4 h-4 shrink-0" />{error}
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl space-y-2 text-rose-700">
+                  <div className="flex items-center gap-3 text-xs font-bold">
+                    <AlertCircle className="w-4 h-4 shrink-0" />{error.message}
+                  </div>
+                  {error.detail && (
+                    <p className="text-[11px] text-rose-700/80 leading-relaxed pl-7">{error.detail}</p>
+                  )}
+                  {error.action && (
+                    <div className="pl-7">
+                      <button
+                        onClick={retryLastAction}
+                        className="text-[10px] font-black uppercase tracking-widest px-2.5 py-1.5 rounded-lg bg-rose-600 text-white hover:bg-rose-700 transition-colors"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -881,15 +931,15 @@ export default function PricingAssistant() {
                     <div className="flex items-center justify-between">
                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Private Notes</p>
                       <div className="flex items-center gap-2">
-                        <button onClick={() => removeFromHistory(activeJob.id)} className="p-1.5 hover:bg-rose-50 text-slate-300 hover:text-rose-500 rounded-lg transition-all">
+                        <button aria-label="Delete this job from history" title="Delete this job" onClick={() => removeFromHistory(activeJob.id)} className="p-1.5 hover:bg-rose-50 text-slate-300 hover:text-rose-500 rounded-lg transition-all">
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                         {isEditingNotes ? (
-                          <button onClick={() => { updateJobNotes(activeJob.id, editedNotes); setIsEditingNotes(false); }} className="p-1.5 bg-black text-white rounded-lg">
+                          <button aria-label="Save private notes" title="Save notes" onClick={() => { updateJobNotes(activeJob.id, editedNotes); setIsEditingNotes(false); }} className="p-1.5 bg-black text-white rounded-lg">
                             <Save className="w-3.5 h-3.5" />
                           </button>
                         ) : (
-                          <button onClick={() => setIsEditingNotes(true)} className="p-1.5 hover:bg-slate-50 rounded-lg text-slate-400">
+                          <button aria-label="Edit private notes" title="Edit notes" onClick={() => setIsEditingNotes(true)} className="p-1.5 hover:bg-slate-50 rounded-lg text-slate-400">
                             <FileText className="w-3.5 h-3.5" />
                           </button>
                         )}
@@ -926,7 +976,7 @@ export default function PricingAssistant() {
               className="bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl w-full sm:max-w-md overflow-hidden flex flex-col max-h-[90vh]">
               <div className="p-5 border-b border-slate-100 flex items-center justify-between shrink-0">
                 <h2 className="text-lg font-bold text-slate-900">Settings</h2>
-                <button onClick={() => setShowSettings(false)} className="p-2 hover:bg-slate-100 rounded-lg"><X className="w-5 h-5 text-slate-400" /></button>
+                <button aria-label="Close settings" title="Close settings" onClick={() => setShowSettings(false)} className="p-2 hover:bg-slate-100 rounded-lg"><X className="w-5 h-5 text-slate-400" /></button>
               </div>
               <div className="p-5 space-y-8 overflow-y-auto">
                 {/* Home ZIP — affects distance on every job */}
