@@ -80,6 +80,7 @@ interface AnalysisResult {
 
 type AppMode = 'Review' | 'Auto';
 type ErrorAction = 'analyze' | 'notify';
+type JobFilter = 'ALL' | 'NEW' | 'REVIEWED' | 'COMPLETED' | 'URGENT';
 
 interface AppError {
   message: string;
@@ -281,6 +282,32 @@ function DecisionHero({ job, copied, onCopyFee }: {
   );
 }
 
+function FeeDrivers({ job }: { job: AnalysisResult }) {
+  const drivers = [
+    { label: 'Distance', value: `${Math.round(job.parsed_input.distance_miles)} mi` },
+    { label: 'Doc size', value: `${job.parsed_input.page_count} pages` },
+    { label: 'Expenses', value: `$${Math.round(job.overhead.total_expenses)}` },
+    { label: 'Net profit', value: job.overhead.net_profit != null ? `$${Math.round(job.overhead.net_profit)}` : 'N/A' },
+  ];
+
+  return (
+    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Why this recommendation</p>
+        <p className="text-[10px] text-slate-500 font-bold">Top cost drivers</p>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {drivers.map((d) => (
+          <div key={d.label} className="p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{d.label}</p>
+            <p className="text-sm font-bold text-slate-800 mt-1">{d.value}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Collapsible Audit Panel ──────────────────────────────────────────
 function CollapsibleAuditPanel({ audit, loading }: { audit: OfferAudit; loading: boolean }) {
   const [open, setOpen] = useState(false);
@@ -470,8 +497,24 @@ export default function PricingAssistant() {
   const [jobs, setJobs] = useState<AnalysisResult[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<PricingSettings>(DEFAULT_SETTINGS);
+  const [jobFilter, setJobFilter] = useState<JobFilter>('ALL');
+  const [jobSearch, setJobSearch] = useState('');
 
   const activeJob = jobs.find(j => j.id === activeJobId) || null;
+  const filteredJobs = jobs.filter((job) => {
+    const matchesFilter =
+      jobFilter === 'ALL' ? true :
+      jobFilter === 'NEW' ? job.status === 'new' :
+      jobFilter === 'REVIEWED' ? job.status === 'reviewed' :
+      jobFilter === 'COMPLETED' ? job.status === 'completed' :
+      job.is_urgent;
+    const needle = jobSearch.trim().toLowerCase();
+    if (!needle) return matchesFilter;
+    const decisionText = getDecisionStyles(job.decision).label.toLowerCase();
+    const docType = job.parsed_input.document_type?.toLowerCase() || '';
+    const feeText = job.parsed_input.offered_fee != null ? String(job.parsed_input.offered_fee) : '';
+    return matchesFilter && `${decisionText} ${docType} ${feeText}`.includes(needle);
+  });
   const [pendingSharedText, setPendingSharedText] = useState<string | null>(null);
   const pendingSettingsRef = React.useRef<PricingSettings>(DEFAULT_SETTINGS);
 
@@ -744,6 +787,36 @@ export default function PricingAssistant() {
               </div>
             )}
 
+            {jobs.length > 0 && (
+              <div className="space-y-2">
+                <input
+                  value={jobSearch}
+                  onChange={(e) => setJobSearch(e.target.value)}
+                  placeholder="Search by fee, decision, doc..."
+                  className="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-black/10 focus:bg-white focus:border-black outline-none transition-all"
+                />
+                <div className="flex flex-wrap gap-1.5">
+                  {([
+                    ['ALL', 'All'],
+                    ['NEW', 'New'],
+                    ['REVIEWED', 'Reviewed'],
+                    ['COMPLETED', 'Done'],
+                    ['URGENT', 'Urgent'],
+                  ] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      onClick={() => setJobFilter(value)}
+                      className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-colors ${
+                        jobFilter === value ? 'bg-black text-white border-black' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {jobs.length === 0 && !isAnalyzing && (
               <div className="flex flex-col items-center justify-center py-10 text-center px-4">
                 <Calculator className="w-8 h-8 text-slate-200 mb-3" />
@@ -751,7 +824,13 @@ export default function PricingAssistant() {
               </div>
             )}
 
-            {jobs.map((job) => {
+            {jobs.length > 0 && filteredJobs.length === 0 && (
+              <div className="px-3 py-4 bg-slate-50 rounded-xl border border-slate-200 text-center">
+                <p className="text-xs font-bold text-slate-500">No jobs match this filter.</p>
+              </div>
+            )}
+
+            {filteredJobs.map((job) => {
               const ds = getDecisionStyles(job.decision);
               const isActive = activeJobId === job.id;
               return (
@@ -856,6 +935,7 @@ export default function PricingAssistant() {
                     copied={copied}
                     onCopyFee={() => copyReply(activeJob.response_message)}
                   />
+                  <FeeDrivers job={activeJob} />
 
                   {/* ── SECTION 2: CRITICAL ALERTS — only what matters ── */}
                   {!activeJob.auditLoading && activeJob.offer_audit && (
