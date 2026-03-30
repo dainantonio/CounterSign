@@ -80,8 +80,9 @@ interface AnalysisResult {
 
 type AppMode = 'Review' | 'Auto';
 type ErrorAction = 'analyze' | 'notify';
-type JobFilter = 'ALL' | 'NEW' | 'REVIEWED' | 'COMPLETED' | 'WON' | 'LOST' | 'URGENT';
+type JobFilter = 'ALL' | 'NEW' | 'REVIEWED' | 'COMPLETED' | 'WON' | 'LOST' | 'URGENT' | 'STALE';
 type SettingsSection = 'location' | 'mode' | 'fees' | 'overhead' | 'templates';
+type JobSort = 'NEWEST' | 'HIGHEST_FEE' | 'LOWEST_FEE' | 'URGENT_FIRST';
 
 interface AppError {
   message: string;
@@ -503,8 +504,14 @@ export default function PricingAssistant() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('location');
   const [undoJobsSnapshot, setUndoJobsSnapshot] = useState<AnalysisResult[] | null>(null);
   const [undoLabel, setUndoLabel] = useState<string | null>(null);
+  const [jobSort, setJobSort] = useState<JobSort>('NEWEST');
 
   const activeJob = jobs.find(j => j.id === activeJobId) || null;
+  const isStaleJob = (job: AnalysisResult) => {
+    const ageMs = Date.now() - job.timestamp;
+    const isClosed = job.status === 'completed' || job.status === 'won' || job.status === 'lost';
+    return !isClosed && ageMs > (24 * 60 * 60 * 1000);
+  };
   const filteredJobs = jobs.filter((job) => {
     const matchesFilter =
       jobFilter === 'ALL' ? true :
@@ -513,6 +520,7 @@ export default function PricingAssistant() {
       jobFilter === 'COMPLETED' ? job.status === 'completed' :
       jobFilter === 'WON' ? job.status === 'won' :
       jobFilter === 'LOST' ? job.status === 'lost' :
+      jobFilter === 'STALE' ? isStaleJob(job) :
       job.is_urgent;
     const needle = jobSearch.trim().toLowerCase();
     if (!needle) return matchesFilter;
@@ -520,6 +528,12 @@ export default function PricingAssistant() {
     const docType = job.parsed_input.document_type?.toLowerCase() || '';
     const feeText = job.parsed_input.offered_fee != null ? String(job.parsed_input.offered_fee) : '';
     return matchesFilter && `${decisionText} ${docType} ${feeText}`.includes(needle);
+  });
+  const sortedJobs = [...filteredJobs].sort((a, b) => {
+    if (jobSort === 'HIGHEST_FEE') return (b.parsed_input.offered_fee || 0) - (a.parsed_input.offered_fee || 0);
+    if (jobSort === 'LOWEST_FEE') return (a.parsed_input.offered_fee || 0) - (b.parsed_input.offered_fee || 0);
+    if (jobSort === 'URGENT_FIRST') return Number(b.is_urgent) - Number(a.is_urgent);
+    return b.timestamp - a.timestamp;
   });
   const [pendingSharedText, setPendingSharedText] = useState<string | null>(null);
   const pendingSettingsRef = React.useRef<PricingSettings>(DEFAULT_SETTINGS);
@@ -875,6 +889,16 @@ export default function PricingAssistant() {
                   placeholder="Search by fee, decision, doc..."
                   className="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-black/10 focus:bg-white focus:border-black outline-none transition-all"
                 />
+                <select
+                  value={jobSort}
+                  onChange={(e) => setJobSort(e.target.value as JobSort)}
+                  className="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-black/10 focus:bg-white focus:border-black outline-none transition-all"
+                >
+                  <option value="NEWEST">Sort: Newest</option>
+                  <option value="URGENT_FIRST">Sort: Urgent first</option>
+                  <option value="HIGHEST_FEE">Sort: Highest fee</option>
+                  <option value="LOWEST_FEE">Sort: Lowest fee</option>
+                </select>
                 <div className="flex flex-wrap gap-1.5">
                   {([
                     ['ALL', 'All'],
@@ -883,6 +907,7 @@ export default function PricingAssistant() {
                     ['COMPLETED', 'Done'],
                     ['WON', 'Won'],
                     ['LOST', 'Lost'],
+                    ['STALE', 'Follow-up'],
                     ['URGENT', 'Urgent'],
                   ] as const).map(([value, label]) => (
                     <button
@@ -906,7 +931,7 @@ export default function PricingAssistant() {
               </div>
             )}
 
-            {jobs.length > 0 && filteredJobs.length === 0 && (
+            {jobs.length > 0 && sortedJobs.length === 0 && (
               <div className="px-3 py-4 bg-slate-50 rounded-xl border border-slate-200 text-center">
                 <p className="text-xs font-bold text-slate-500">No jobs match this filter.</p>
               </div>
@@ -921,7 +946,7 @@ export default function PricingAssistant() {
               </div>
             )}
 
-            {filteredJobs.map((job) => {
+            {sortedJobs.map((job) => {
               const ds = getDecisionStyles(job.decision);
               const isActive = activeJobId === job.id;
               return (
@@ -939,6 +964,7 @@ export default function PricingAssistant() {
                         {job.decision === 'RATE_QUOTE' ? 'Rate Inquiry' : job.parsed_input.document_type}
                       </span>
                       {job.is_urgent && <span className="text-[8px] font-black px-1 py-0.5 bg-amber-100 text-amber-700 rounded uppercase">Urgent</span>}
+                      {isStaleJob(job) && <span className="text-[8px] font-black px-1 py-0.5 bg-violet-100 text-violet-700 rounded uppercase">Follow-up</span>}
                     </div>
                     <span className={`text-sm font-display font-black ${isActive ? 'text-white' : 'text-slate-900'}`}>
                       {job.parsed_input.offered_fee != null ? `$${job.parsed_input.offered_fee}` : '—'}
