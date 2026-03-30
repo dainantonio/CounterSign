@@ -44,7 +44,7 @@ interface AnalysisResult {
   response_message: string;
   rate_inquiry_response: string | null;
   action_type: 'AUTO_SEND' | 'DRAFT' | 'REVIEW';
-  status: 'new' | 'reviewed' | 'completed';
+  status: 'new' | 'reviewed' | 'completed' | 'won' | 'lost';
   auditLoading: boolean;
   timestamp: number;
   notes?: string;
@@ -79,6 +79,15 @@ interface AnalysisResult {
 }
 
 type AppMode = 'Review' | 'Auto';
+type ErrorAction = 'analyze' | 'notify';
+type JobFilter = 'ALL' | 'NEW' | 'REVIEWED' | 'COMPLETED' | 'WON' | 'LOST' | 'URGENT';
+type SettingsSection = 'location' | 'mode' | 'fees' | 'overhead' | 'templates';
+
+interface AppError {
+  message: string;
+  detail?: string;
+  action?: ErrorAction;
+}
 
 // ─── Onboarding slides ────────────────────────────────────────────────
 const ONBOARDING_SLIDES = [
@@ -274,6 +283,32 @@ function DecisionHero({ job, copied, onCopyFee }: {
   );
 }
 
+function FeeDrivers({ job }: { job: AnalysisResult }) {
+  const drivers = [
+    { label: 'Distance', value: `${Math.round(job.parsed_input.distance_miles)} mi` },
+    { label: 'Doc size', value: `${job.parsed_input.page_count} pages` },
+    { label: 'Expenses', value: `$${Math.round(job.overhead.total_expenses)}` },
+    { label: 'Net profit', value: job.overhead.net_profit != null ? `$${Math.round(job.overhead.net_profit)}` : 'N/A' },
+  ];
+
+  return (
+    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Why this recommendation</p>
+        <p className="text-[10px] text-slate-500 font-bold">Top cost drivers</p>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {drivers.map((d) => (
+          <div key={d.label} className="p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{d.label}</p>
+            <p className="text-sm font-bold text-slate-800 mt-1">{d.value}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Collapsible Audit Panel ──────────────────────────────────────────
 function CollapsibleAuditPanel({ audit, loading }: { audit: OfferAudit; loading: boolean }) {
   const [open, setOpen] = useState(false);
@@ -451,7 +486,7 @@ export default function PricingAssistant() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isAnalyzingPhase, setIsAnalyzingPhase] = useState<'idle' | 'fast' | 'full'>('idle');
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<AppError | null>(null);
   const [copied, setCopied] = useState(false);
   const [mode, setMode] = useState<AppMode>('Review');
   const [isEditingNotes, setIsEditingNotes] = useState(false);
@@ -463,10 +498,44 @@ export default function PricingAssistant() {
   const [jobs, setJobs] = useState<AnalysisResult[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<PricingSettings>(DEFAULT_SETTINGS);
+  const [jobFilter, setJobFilter] = useState<JobFilter>('ALL');
+  const [jobSearch, setJobSearch] = useState('');
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('location');
+  const [undoJobsSnapshot, setUndoJobsSnapshot] = useState<AnalysisResult[] | null>(null);
+  const [undoLabel, setUndoLabel] = useState<string | null>(null);
 
   const activeJob = jobs.find(j => j.id === activeJobId) || null;
+  const filteredJobs = jobs.filter((job) => {
+    const matchesFilter =
+      jobFilter === 'ALL' ? true :
+      jobFilter === 'NEW' ? job.status === 'new' :
+      jobFilter === 'REVIEWED' ? job.status === 'reviewed' :
+      jobFilter === 'COMPLETED' ? job.status === 'completed' :
+      jobFilter === 'WON' ? job.status === 'won' :
+      jobFilter === 'LOST' ? job.status === 'lost' :
+      job.is_urgent;
+    const needle = jobSearch.trim().toLowerCase();
+    if (!needle) return matchesFilter;
+    const decisionText = getDecisionStyles(job.decision).label.toLowerCase();
+    const docType = job.parsed_input.document_type?.toLowerCase() || '';
+    const feeText = job.parsed_input.offered_fee != null ? String(job.parsed_input.offered_fee) : '';
+    return matchesFilter && `${decisionText} ${docType} ${feeText}`.includes(needle);
+  });
   const [pendingSharedText, setPendingSharedText] = useState<string | null>(null);
   const pendingSettingsRef = React.useRef<PricingSettings>(DEFAULT_SETTINGS);
+  const undoTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pipelineStats = React.useMemo(() => {
+    const total = jobs.length;
+    const reviewed = jobs.filter(j => j.status === 'reviewed').length;
+    const completed = jobs.filter(j => j.status === 'completed').length;
+    const won = jobs.filter(j => j.status === 'won').length;
+    const lost = jobs.filter(j => j.status === 'lost').length;
+    const avgOffered = jobs
+      .filter(j => j.parsed_input.offered_fee != null)
+      .reduce((acc, j, _, arr) => acc + ((j.parsed_input.offered_fee || 0) / arr.length), 0);
+    const winRate = (won + lost) > 0 ? Math.round((won / (won + lost)) * 100) : 0;
+    return { total, reviewed, completed, won, lost, winRate, avgOffered: Math.round(avgOffered) };
+  }, [jobs]);
 
   React.useEffect(() => {
     const sj = localStorage.getItem('notary_job_history');
@@ -503,6 +572,12 @@ export default function PricingAssistant() {
     }
   }, [mounted, pendingSharedText]);
 
+  React.useEffect(() => {
+    return () => {
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    };
+  }, []);
+
   const completeOnboarding = () => {
     localStorage.setItem('sigseal_onboarding_done', '1');
     setShowOnboarding(false);
@@ -514,10 +589,33 @@ export default function PricingAssistant() {
     setShowSettings(false);
   };
 
+  const resetSettings = () => {
+    setSettings(DEFAULT_SETTINGS);
+  };
+
   const updateJobNotes = (id: string, notes: string) => {
     const updated = jobs.map(j => j.id === id ? { ...j, notes } : j);
     setJobs(updated);
     localStorage.setItem('notary_job_history', JSON.stringify(updated));
+  };
+
+  const queueUndo = (snapshot: AnalysisResult[], label: string) => {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    setUndoJobsSnapshot(snapshot);
+    setUndoLabel(label);
+    undoTimerRef.current = setTimeout(() => {
+      setUndoJobsSnapshot(null);
+      setUndoLabel(null);
+    }, 6000);
+  };
+
+  const undoLastAction = () => {
+    if (!undoJobsSnapshot) return;
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    setJobs(undoJobsSnapshot);
+    localStorage.setItem('notary_job_history', JSON.stringify(undoJobsSnapshot));
+    setUndoJobsSnapshot(null);
+    setUndoLabel(null);
   };
 
   const handleAnalyzeText = async (text: string, settingsOverride?: PricingSettings) => {
@@ -601,7 +699,11 @@ export default function PricingAssistant() {
         handleNotify(newJob);
       }
     } catch (err: any) {
-      setError(err?.message || 'Failed to analyze. Please try again.');
+      setError({
+        message: 'Failed to analyze this offer.',
+        detail: err?.message || 'Unknown error from analysis service.',
+        action: 'analyze',
+      });
     } finally {
       setIsAnalyzing(false);
       setIsAnalyzingPhase('idle');
@@ -609,6 +711,17 @@ export default function PricingAssistant() {
   };
 
   const handleAnalyze = () => handleAnalyzeText(offerText);
+  const retryLastAction = () => {
+    if (!error?.action) return;
+    setError(null);
+    if (error.action === 'analyze') {
+      handleAnalyze();
+      return;
+    }
+    if (error.action === 'notify' && activeJob) {
+      handleNotify(activeJob);
+    }
+  };
 
   const updateJobStatus = (id: string, status: AnalysisResult['status']) => {
     const newJobs = jobs.map(j => j.id === id ? { ...j, status } : j);
@@ -621,9 +734,31 @@ export default function PricingAssistant() {
     try {
       const response = await fetch('/api/notify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(job) });
       if (response.ok) { setNotificationSent(true); updateJobStatus(job.id, 'completed'); }
-      else setError('Failed to send notification.');
-    } catch { setError('An error occurred.'); }
+      else {
+        const body = await response.json().catch(() => ({}));
+        setError({
+          message: 'Could not log this decision.',
+          detail: body?.error ? JSON.stringify(body.error) : `Request failed with status ${response.status}.`,
+          action: 'notify',
+        });
+      }
+    } catch (err: any) {
+      setError({
+        message: 'Could not log this decision.',
+        detail: err?.message || 'Unknown network error.',
+        action: 'notify',
+      });
+    }
     finally { setIsNotifying(false); }
+  };
+
+  const handleDecisionAction = (job: AnalysisResult, action: 'ACCEPT' | 'COUNTER' | 'DECLINE') => {
+    const isOverride = job.decision !== action && !(job.decision === 'CONDITIONAL_COUNTER' && action === 'COUNTER');
+    if (isOverride) {
+      const overrideLine = `Manual override: AI recommended ${job.decision}, user sent ${action} (${new Date().toLocaleString()}).`;
+      updateJobNotes(job.id, `${overrideLine}${job.notes ? `\n${job.notes}` : ''}`);
+    }
+    handleNotify({ ...job, decision: action });
   };
 
   const copyReply = (text: string) => {
@@ -633,6 +768,7 @@ export default function PricingAssistant() {
   };
 
   const removeFromHistory = (id: string) => {
+    queueUndo(jobs, 'Job removed');
     const newJobs = jobs.filter(j => j.id !== id);
     setJobs(newJobs);
     if (activeJobId === id) setActiveJobId(null);
@@ -661,8 +797,8 @@ export default function PricingAssistant() {
             <option value="Review">Review</option>
             <option value="Auto">Auto-Accept</option>
           </select>
-          <button onClick={() => setShowOnboarding(true)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-700 transition-all text-xs font-bold">?</button>
-          <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-700 transition-all">
+          <button aria-label="Open onboarding help" title="Open onboarding help" onClick={() => setShowOnboarding(true)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-700 transition-all text-xs font-bold">?</button>
+          <button aria-label="Open settings" title="Open settings" onClick={() => setShowSettings(true)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-700 transition-all">
             <SettingsIcon className="w-4 h-4" />
           </button>
         </div>
@@ -673,7 +809,7 @@ export default function PricingAssistant() {
         <aside className={`absolute inset-0 z-20 bg-white border-r border-slate-200 flex flex-col transition-transform duration-300 lg:relative lg:translate-x-0 lg:w-72 xl:w-80 ${activeJobId ? '-translate-x-full lg:translate-x-0' : 'translate-x-0'}`}>
           <div className="p-3 border-b border-slate-100 flex items-center justify-between">
             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Jobs</span>
-            <button onClick={() => { setJobs([]); localStorage.removeItem('notary_job_history'); }} className="p-1 hover:bg-rose-50 text-slate-300 hover:text-rose-500 rounded-lg transition-all">
+            <button aria-label="Clear all jobs" title="Clear all jobs" onClick={() => { queueUndo(jobs, 'All jobs cleared'); setJobs([]); localStorage.removeItem('notary_job_history'); }} className="p-1 hover:bg-rose-50 text-slate-300 hover:text-rose-500 rounded-lg transition-all">
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -690,12 +826,12 @@ export default function PricingAssistant() {
               />
               <div className="absolute bottom-2.5 right-2.5 flex items-center gap-1.5">
                 {!offerText.trim() && (
-                  <button onClick={async () => { try { const t = await navigator.clipboard.readText(); if (t) setOfferText(t); } catch {} }}
+                  <button aria-label="Paste from clipboard" onClick={async () => { try { const t = await navigator.clipboard.readText(); if (t) setOfferText(t); } catch {} }}
                     className="p-1.5 bg-slate-200 text-slate-600 rounded-lg hover:bg-slate-300 transition-all" title="Paste from clipboard">
                     <Copy className="w-3.5 h-3.5" />
                   </button>
                 )}
-                <button onClick={handleAnalyze} disabled={isAnalyzing || !offerText.trim()}
+                <button aria-label="Analyze offer" onClick={handleAnalyze} disabled={isAnalyzing || !offerText.trim()}
                   className="p-2 bg-black text-white rounded-xl disabled:opacity-50 hover:scale-105 active:scale-95 transition-all">
                   {isAnalyzing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
                 </button>
@@ -709,6 +845,60 @@ export default function PricingAssistant() {
               </div>
             )}
 
+            {jobs.length > 0 && (
+              <div className="space-y-2">
+                <div className="grid grid-cols-5 gap-1.5">
+                  <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Total</p>
+                    <p className="text-xs font-bold text-slate-700">{pipelineStats.total}</p>
+                  </div>
+                  <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Reviewed</p>
+                    <p className="text-xs font-bold text-slate-700">{pipelineStats.reviewed}</p>
+                  </div>
+                  <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Done</p>
+                    <p className="text-xs font-bold text-slate-700">{pipelineStats.completed}</p>
+                  </div>
+                  <div className="p-2 bg-emerald-50 border border-emerald-200 rounded-lg">
+                    <p className="text-[9px] font-black uppercase text-emerald-600">Won</p>
+                    <p className="text-xs font-bold text-emerald-700">{pipelineStats.won}</p>
+                  </div>
+                  <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Win Rate</p>
+                    <p className="text-xs font-bold text-slate-700">{pipelineStats.winRate}%</p>
+                  </div>
+                </div>
+                <input
+                  value={jobSearch}
+                  onChange={(e) => setJobSearch(e.target.value)}
+                  placeholder="Search by fee, decision, doc..."
+                  className="w-full p-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-black/10 focus:bg-white focus:border-black outline-none transition-all"
+                />
+                <div className="flex flex-wrap gap-1.5">
+                  {([
+                    ['ALL', 'All'],
+                    ['NEW', 'New'],
+                    ['REVIEWED', 'Reviewed'],
+                    ['COMPLETED', 'Done'],
+                    ['WON', 'Won'],
+                    ['LOST', 'Lost'],
+                    ['URGENT', 'Urgent'],
+                  ] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      onClick={() => setJobFilter(value)}
+                      className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-colors ${
+                        jobFilter === value ? 'bg-black text-white border-black' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {jobs.length === 0 && !isAnalyzing && (
               <div className="flex flex-col items-center justify-center py-10 text-center px-4">
                 <Calculator className="w-8 h-8 text-slate-200 mb-3" />
@@ -716,7 +906,22 @@ export default function PricingAssistant() {
               </div>
             )}
 
-            {jobs.map((job) => {
+            {jobs.length > 0 && filteredJobs.length === 0 && (
+              <div className="px-3 py-4 bg-slate-50 rounded-xl border border-slate-200 text-center">
+                <p className="text-xs font-bold text-slate-500">No jobs match this filter.</p>
+              </div>
+            )}
+
+            {undoJobsSnapshot && (
+              <div className="px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-2">
+                <p className="text-[11px] font-bold text-amber-800">{undoLabel}</p>
+                <button onClick={undoLastAction} className="px-2 py-1 rounded-lg bg-amber-500 text-white text-[10px] font-black uppercase tracking-wider">
+                  Undo
+                </button>
+              </div>
+            )}
+
+            {filteredJobs.map((job) => {
               const ds = getDecisionStyles(job.decision);
               const isActive = activeJobId === job.id;
               return (
@@ -729,7 +934,7 @@ export default function PricingAssistant() {
 
                   <div className="flex items-center justify-between mb-2 pl-1">
                     <div className="flex items-center gap-2">
-                      <div className={`w-1.5 h-1.5 rounded-full ${job.status === 'new' ? 'bg-rose-500 animate-pulse' : job.status === 'reviewed' ? 'bg-amber-400' : 'bg-slate-300'}`} />
+                      <div className={`w-1.5 h-1.5 rounded-full ${job.status === 'new' ? 'bg-rose-500 animate-pulse' : job.status === 'reviewed' ? 'bg-amber-400' : job.status === 'won' ? 'bg-emerald-500' : job.status === 'lost' ? 'bg-rose-400' : 'bg-slate-300'}`} />
                       <span className={`text-[10px] font-black uppercase tracking-wider ${isActive ? 'text-white/50' : 'text-slate-400'}`}>
                         {job.decision === 'RATE_QUOTE' ? 'Rate Inquiry' : job.parsed_input.document_type}
                       </span>
@@ -778,8 +983,23 @@ export default function PricingAssistant() {
               </button>
 
               {error && (
-                <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-3 text-rose-700 text-xs font-medium">
-                  <AlertCircle className="w-4 h-4 shrink-0" />{error}
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl space-y-2 text-rose-700">
+                  <div className="flex items-center gap-3 text-xs font-bold">
+                    <AlertCircle className="w-4 h-4 shrink-0" />{error.message}
+                  </div>
+                  {error.detail && (
+                    <p className="text-[11px] text-rose-700/80 leading-relaxed pl-7">{error.detail}</p>
+                  )}
+                  {error.action && (
+                    <div className="pl-7">
+                      <button
+                        onClick={retryLastAction}
+                        className="text-[10px] font-black uppercase tracking-widest px-2.5 py-1.5 rounded-lg bg-rose-600 text-white hover:bg-rose-700 transition-colors"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -806,6 +1026,7 @@ export default function PricingAssistant() {
                     copied={copied}
                     onCopyFee={() => copyReply(activeJob.response_message)}
                   />
+                  <FeeDrivers job={activeJob} />
 
                   {/* ── SECTION 2: CRITICAL ALERTS — only what matters ── */}
                   {!activeJob.auditLoading && activeJob.offer_audit && (
@@ -820,7 +1041,7 @@ export default function PricingAssistant() {
                         const isRec = (activeJob.decision === action || (action === 'COUNTER' && activeJob.decision === 'CONDITIONAL_COUNTER'));
                         return (
                           <button key={action}
-                            onClick={() => handleNotify({ ...activeJob, decision: action })}
+                            onClick={() => handleDecisionAction(activeJob, action)}
                             disabled={isNotifying || activeJob.status === 'completed'}
                             className={`flex flex-col items-center gap-1.5 py-4 rounded-2xl font-black text-xs uppercase tracking-wider transition-all disabled:opacity-50 active:scale-[0.97] ${
                               isRec
@@ -854,6 +1075,21 @@ export default function PricingAssistant() {
                     </motion.div>
                   )}
 
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => updateJobStatus(activeJob.id, 'won')}
+                      className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider border-2 transition-colors ${activeJob.status === 'won' ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-white border-emerald-200 text-emerald-700 hover:bg-emerald-50'}`}
+                    >
+                      Mark Won
+                    </button>
+                    <button
+                      onClick={() => updateJobStatus(activeJob.id, 'lost')}
+                      className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider border-2 transition-colors ${activeJob.status === 'lost' ? 'bg-rose-500 border-rose-500 text-white' : 'bg-white border-rose-200 text-rose-700 hover:bg-rose-50'}`}
+                    >
+                      Mark Lost
+                    </button>
+                  </div>
+
                   {/* ── SECTION 4: OFFER AUDIT — collapsed by default ── */}
                   <CollapsibleAuditPanel
                     audit={activeJob.offer_audit}
@@ -881,15 +1117,15 @@ export default function PricingAssistant() {
                     <div className="flex items-center justify-between">
                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Private Notes</p>
                       <div className="flex items-center gap-2">
-                        <button onClick={() => removeFromHistory(activeJob.id)} className="p-1.5 hover:bg-rose-50 text-slate-300 hover:text-rose-500 rounded-lg transition-all">
+                        <button aria-label="Delete this job from history" title="Delete this job" onClick={() => removeFromHistory(activeJob.id)} className="p-1.5 hover:bg-rose-50 text-slate-300 hover:text-rose-500 rounded-lg transition-all">
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                         {isEditingNotes ? (
-                          <button onClick={() => { updateJobNotes(activeJob.id, editedNotes); setIsEditingNotes(false); }} className="p-1.5 bg-black text-white rounded-lg">
+                          <button aria-label="Save private notes" title="Save notes" onClick={() => { updateJobNotes(activeJob.id, editedNotes); setIsEditingNotes(false); }} className="p-1.5 bg-black text-white rounded-lg">
                             <Save className="w-3.5 h-3.5" />
                           </button>
                         ) : (
-                          <button onClick={() => setIsEditingNotes(true)} className="p-1.5 hover:bg-slate-50 rounded-lg text-slate-400">
+                          <button aria-label="Edit private notes" title="Edit notes" onClick={() => setIsEditingNotes(true)} className="p-1.5 hover:bg-slate-50 rounded-lg text-slate-400">
                             <FileText className="w-3.5 h-3.5" />
                           </button>
                         )}
@@ -926,77 +1162,113 @@ export default function PricingAssistant() {
               className="bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl w-full sm:max-w-md overflow-hidden flex flex-col max-h-[90vh]">
               <div className="p-5 border-b border-slate-100 flex items-center justify-between shrink-0">
                 <h2 className="text-lg font-bold text-slate-900">Settings</h2>
-                <button onClick={() => setShowSettings(false)} className="p-2 hover:bg-slate-100 rounded-lg"><X className="w-5 h-5 text-slate-400" /></button>
+                <button aria-label="Close settings" title="Close settings" onClick={() => setShowSettings(false)} className="p-2 hover:bg-slate-100 rounded-lg"><X className="w-5 h-5 text-slate-400" /></button>
               </div>
-              <div className="p-5 space-y-8 overflow-y-auto">
-                {/* Home ZIP — affects distance on every job */}
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2"><MapPin className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Your Location</h3></div>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Home ZIP Code</label>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={5}
-                      placeholder="e.g. 43214"
-                      value={settings.homeZip || ''}
-                      onChange={(e) => setSettings({...settings, homeZip: e.target.value.replace(/\D/g,'')})}
-                      className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-bold"
-                    />
-                    <p className="text-[10px] text-slate-400 leading-relaxed">Used to estimate driving distance from your home to each signing. More accurate fee calculations.</p>
-                  </div>
-                </div>
-
-                {/* Auto-Accept mode explanation */}
-                <div className="space-y-3 pt-4 border-t border-slate-100">
-                  <div className="flex items-center gap-2"><Zap className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Mode</h3></div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${mode === 'Review' ? 'border-black bg-black text-white' : 'border-slate-100 bg-slate-50 text-slate-600'}`} onClick={() => setMode('Review')}>
-                      <p className="text-xs font-black mb-1">Review</p>
-                      <p className={`text-[10px] leading-relaxed ${mode === 'Review' ? 'text-white/70' : 'text-slate-400'}`}>You confirm every action manually. Recommended for most users.</p>
-                    </div>
-                    <div className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${mode === 'Auto' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-100 bg-slate-50 text-slate-600'}`} onClick={() => setMode('Auto')}>
-                      <p className="text-xs font-black mb-1">Auto-Accept</p>
-                      <p className={`text-[10px] leading-relaxed ${mode === 'Auto' ? 'text-emerald-600' : 'text-slate-400'}`}>Automatically logs ACCEPT when AI is HIGH confidence. You still manually Counter or Decline.</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2"><DollarSign className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Fee Structure</h3></div>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[{label:'Base Fee ($)',key:'baseFee',step:'1'},{label:'Mileage ($/mi)',key:'mileageRate',step:'0.01'},{label:'After Hours',key:'afterHoursFee',step:'1'},{label:'Refinance +',key:'refinanceFee',step:'1'},{label:'Purchase +',key:'purchaseFee',step:'1'}].map(({label,key,step}) => (
-                      <div key={key} className="space-y-1.5">
-                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">{label}</label>
-                        <input type="number" step={step} value={(settings as any)[key]} onChange={(e) => setSettings({...settings,[key]:Number(e.target.value)})} className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-bold" />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="space-y-4 pt-4 border-t border-slate-100">
-                  <div className="flex items-center gap-2"><Calculator className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Overhead</h3></div>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[{label:'IRS Mileage ($)',key:'irsMileageRate',step:'0.01'},{label:'Printing ($/pg)',key:'printingRate',step:'0.01'},{label:'Hourly Rate ($)',key:'hourlyRate',step:'1'},{label:'Scanback Fee ($)',key:'scanbackFee',step:'1'},{label:'Min Hourly Profit',key:'minHourlyNetProfit',step:'1'},{label:'Base Overhead',key:'baseOverhead',step:'1'}].map(({label,key,step}) => (
-                      <div key={key} className="space-y-1.5">
-                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">{label}</label>
-                        <input type="number" step={step} value={(settings as any)[key]} onChange={(e) => setSettings({...settings,[key]:Number(e.target.value)})} className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-bold" />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="space-y-4 pt-4 border-t border-slate-100">
-                  <div className="flex items-center gap-2"><FileText className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Templates</h3></div>
-                  {[{label:'Accept',key:'ACCEPT',rows:2},{label:'Counter',key:'COUNTER',rows:3},{label:'Decline',key:'DECLINE',rows:2},{label:'Conditional Counter',key:'CONDITIONAL_COUNTER',rows:3},{label:'Rate Inquiry',key:'RATE_INQUIRY',rows:3}].map(({label,key,rows}) => (
-                    <div key={key} className="space-y-1.5">
-                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">{label}</label>
-                      <textarea value={(settings.templates as any)[key]||''} onChange={(e) => setSettings({...settings,templates:{...settings.templates,[key]:e.target.value}})} rows={rows} className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-mono" />
-                    </div>
+              <div className="p-5 space-y-4 overflow-y-auto">
+                <div className="flex flex-wrap gap-1.5">
+                  {([
+                    ['location', 'Location'],
+                    ['mode', 'Mode'],
+                    ['fees', 'Fees'],
+                    ['overhead', 'Overhead'],
+                    ['templates', 'Templates'],
+                  ] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      onClick={() => setSettingsSection(value)}
+                      className={`px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-colors ${
+                        settingsSection === value ? 'bg-black text-white border-black' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      {label}
+                    </button>
                   ))}
                 </div>
+
+                {settingsSection === 'location' && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2"><MapPin className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Your Location</h3></div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Home ZIP Code</label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={5}
+                        placeholder="e.g. 43214"
+                        value={settings.homeZip || ''}
+                        onChange={(e) => setSettings({...settings, homeZip: e.target.value.replace(/\D/g,'')})}
+                        className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-bold"
+                      />
+                      <p className="text-[10px] text-slate-400 leading-relaxed">Used to estimate driving distance from your home to each signing. More accurate fee calculations.</p>
+                    </div>
+                  </div>
+                )}
+
+                {settingsSection === 'mode' && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2"><Zap className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Mode</h3></div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${mode === 'Review' ? 'border-black bg-black text-white' : 'border-slate-100 bg-slate-50 text-slate-600'}`} onClick={() => setMode('Review')}>
+                        <p className="text-xs font-black mb-1">Review</p>
+                        <p className={`text-[10px] leading-relaxed ${mode === 'Review' ? 'text-white/70' : 'text-slate-400'}`}>You confirm every action manually. Recommended for most users.</p>
+                      </div>
+                      <div className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${mode === 'Auto' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-100 bg-slate-50 text-slate-600'}`} onClick={() => setMode('Auto')}>
+                        <p className="text-xs font-black mb-1">Auto-Accept</p>
+                        <p className={`text-[10px] leading-relaxed ${mode === 'Auto' ? 'text-emerald-600' : 'text-slate-400'}`}>Automatically logs ACCEPT when AI is HIGH confidence. You still manually Counter or Decline.</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {settingsSection === 'fees' && (
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2"><DollarSign className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Fee Structure</h3></div>
+                    <div className="grid grid-cols-2 gap-3">
+                      {[{label:'Base Fee ($)',key:'baseFee',step:'1'},{label:'Mileage ($/mi)',key:'mileageRate',step:'0.01'},{label:'After Hours',key:'afterHoursFee',step:'1'},{label:'Refinance +',key:'refinanceFee',step:'1'},{label:'Purchase +',key:'purchaseFee',step:'1'}].map(({label,key,step}) => (
+                        <div key={key} className="space-y-1.5">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">{label}</label>
+                          <input type="number" step={step} value={(settings as any)[key]} onChange={(e) => setSettings({...settings,[key]:Number(e.target.value)})} className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-bold" />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {settingsSection === 'overhead' && (
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2"><Calculator className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Overhead</h3></div>
+                    <div className="grid grid-cols-2 gap-3">
+                      {[{label:'IRS Mileage ($)',key:'irsMileageRate',step:'0.01'},{label:'Printing ($/pg)',key:'printingRate',step:'0.01'},{label:'Hourly Rate ($)',key:'hourlyRate',step:'1'},{label:'Scanback Fee ($)',key:'scanbackFee',step:'1'},{label:'Min Hourly Profit',key:'minHourlyNetProfit',step:'1'},{label:'Base Overhead',key:'baseOverhead',step:'1'}].map(({label,key,step}) => (
+                        <div key={key} className="space-y-1.5">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">{label}</label>
+                          <input type="number" step={step} value={(settings as any)[key]} onChange={(e) => setSettings({...settings,[key]:Number(e.target.value)})} className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-bold" />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {settingsSection === 'templates' && (
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2"><FileText className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Templates</h3></div>
+                    {[{label:'Accept',key:'ACCEPT',rows:2},{label:'Counter',key:'COUNTER',rows:3},{label:'Decline',key:'DECLINE',rows:2},{label:'Conditional Counter',key:'CONDITIONAL_COUNTER',rows:3},{label:'Rate Inquiry',key:'RATE_INQUIRY',rows:3}].map(({label,key,rows}) => (
+                      <div key={key} className="space-y-1.5">
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">{label}</label>
+                        <textarea value={(settings.templates as any)[key]||''} onChange={(e) => setSettings({...settings,templates:{...settings.templates,[key]:e.target.value}})} rows={rows} className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-mono" />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="p-5 border-t border-slate-100 shrink-0">
-                <button onClick={() => saveSettings(settings)} className="w-full py-4 bg-black text-white rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-slate-800 transition-all active:scale-[0.98] flex items-center justify-center gap-2">
-                  <Save className="w-4 h-4" /> Save Settings
-                </button>
+                <div className="grid grid-cols-2 gap-3">
+                  <button onClick={resetSettings} className="w-full py-4 bg-slate-100 text-slate-700 rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-slate-200 transition-all active:scale-[0.98]">
+                    Reset Defaults
+                  </button>
+                  <button onClick={() => saveSettings(settings)} className="w-full py-4 bg-black text-white rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-slate-800 transition-all active:scale-[0.98] flex items-center justify-center gap-2">
+                    <Save className="w-4 h-4" /> Save Settings
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>
