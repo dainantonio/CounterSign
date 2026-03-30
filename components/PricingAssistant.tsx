@@ -81,6 +81,7 @@ interface AnalysisResult {
 type AppMode = 'Review' | 'Auto';
 type ErrorAction = 'analyze' | 'notify';
 type JobFilter = 'ALL' | 'NEW' | 'REVIEWED' | 'COMPLETED' | 'URGENT';
+type SettingsSection = 'location' | 'mode' | 'fees' | 'overhead' | 'templates';
 
 interface AppError {
   message: string;
@@ -499,6 +500,7 @@ export default function PricingAssistant() {
   const [settings, setSettings] = useState<PricingSettings>(DEFAULT_SETTINGS);
   const [jobFilter, setJobFilter] = useState<JobFilter>('ALL');
   const [jobSearch, setJobSearch] = useState('');
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('location');
 
   const activeJob = jobs.find(j => j.id === activeJobId) || null;
   const filteredJobs = jobs.filter((job) => {
@@ -562,6 +564,10 @@ export default function PricingAssistant() {
     setSettings(s);
     localStorage.setItem('notary_pricing_settings', JSON.stringify(s));
     setShowSettings(false);
+  };
+
+  const resetSettings = () => {
+    setSettings(DEFAULT_SETTINGS);
   };
 
   const updateJobNotes = (id: string, notes: string) => {
@@ -1058,75 +1064,111 @@ export default function PricingAssistant() {
                 <h2 className="text-lg font-bold text-slate-900">Settings</h2>
                 <button aria-label="Close settings" title="Close settings" onClick={() => setShowSettings(false)} className="p-2 hover:bg-slate-100 rounded-lg"><X className="w-5 h-5 text-slate-400" /></button>
               </div>
-              <div className="p-5 space-y-8 overflow-y-auto">
-                {/* Home ZIP — affects distance on every job */}
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2"><MapPin className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Your Location</h3></div>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Home ZIP Code</label>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={5}
-                      placeholder="e.g. 43214"
-                      value={settings.homeZip || ''}
-                      onChange={(e) => setSettings({...settings, homeZip: e.target.value.replace(/\D/g,'')})}
-                      className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-bold"
-                    />
-                    <p className="text-[10px] text-slate-400 leading-relaxed">Used to estimate driving distance from your home to each signing. More accurate fee calculations.</p>
-                  </div>
-                </div>
-
-                {/* Auto-Accept mode explanation */}
-                <div className="space-y-3 pt-4 border-t border-slate-100">
-                  <div className="flex items-center gap-2"><Zap className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Mode</h3></div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${mode === 'Review' ? 'border-black bg-black text-white' : 'border-slate-100 bg-slate-50 text-slate-600'}`} onClick={() => setMode('Review')}>
-                      <p className="text-xs font-black mb-1">Review</p>
-                      <p className={`text-[10px] leading-relaxed ${mode === 'Review' ? 'text-white/70' : 'text-slate-400'}`}>You confirm every action manually. Recommended for most users.</p>
-                    </div>
-                    <div className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${mode === 'Auto' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-100 bg-slate-50 text-slate-600'}`} onClick={() => setMode('Auto')}>
-                      <p className="text-xs font-black mb-1">Auto-Accept</p>
-                      <p className={`text-[10px] leading-relaxed ${mode === 'Auto' ? 'text-emerald-600' : 'text-slate-400'}`}>Automatically logs ACCEPT when AI is HIGH confidence. You still manually Counter or Decline.</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2"><DollarSign className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Fee Structure</h3></div>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[{label:'Base Fee ($)',key:'baseFee',step:'1'},{label:'Mileage ($/mi)',key:'mileageRate',step:'0.01'},{label:'After Hours',key:'afterHoursFee',step:'1'},{label:'Refinance +',key:'refinanceFee',step:'1'},{label:'Purchase +',key:'purchaseFee',step:'1'}].map(({label,key,step}) => (
-                      <div key={key} className="space-y-1.5">
-                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">{label}</label>
-                        <input type="number" step={step} value={(settings as any)[key]} onChange={(e) => setSettings({...settings,[key]:Number(e.target.value)})} className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-bold" />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="space-y-4 pt-4 border-t border-slate-100">
-                  <div className="flex items-center gap-2"><Calculator className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Overhead</h3></div>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[{label:'IRS Mileage ($)',key:'irsMileageRate',step:'0.01'},{label:'Printing ($/pg)',key:'printingRate',step:'0.01'},{label:'Hourly Rate ($)',key:'hourlyRate',step:'1'},{label:'Scanback Fee ($)',key:'scanbackFee',step:'1'},{label:'Min Hourly Profit',key:'minHourlyNetProfit',step:'1'},{label:'Base Overhead',key:'baseOverhead',step:'1'}].map(({label,key,step}) => (
-                      <div key={key} className="space-y-1.5">
-                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">{label}</label>
-                        <input type="number" step={step} value={(settings as any)[key]} onChange={(e) => setSettings({...settings,[key]:Number(e.target.value)})} className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-bold" />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="space-y-4 pt-4 border-t border-slate-100">
-                  <div className="flex items-center gap-2"><FileText className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Templates</h3></div>
-                  {[{label:'Accept',key:'ACCEPT',rows:2},{label:'Counter',key:'COUNTER',rows:3},{label:'Decline',key:'DECLINE',rows:2},{label:'Conditional Counter',key:'CONDITIONAL_COUNTER',rows:3},{label:'Rate Inquiry',key:'RATE_INQUIRY',rows:3}].map(({label,key,rows}) => (
-                    <div key={key} className="space-y-1.5">
-                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">{label}</label>
-                      <textarea value={(settings.templates as any)[key]||''} onChange={(e) => setSettings({...settings,templates:{...settings.templates,[key]:e.target.value}})} rows={rows} className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-mono" />
-                    </div>
+              <div className="p-5 space-y-4 overflow-y-auto">
+                <div className="flex flex-wrap gap-1.5">
+                  {([
+                    ['location', 'Location'],
+                    ['mode', 'Mode'],
+                    ['fees', 'Fees'],
+                    ['overhead', 'Overhead'],
+                    ['templates', 'Templates'],
+                  ] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      onClick={() => setSettingsSection(value)}
+                      className={`px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-colors ${
+                        settingsSection === value ? 'bg-black text-white border-black' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      {label}
+                    </button>
                   ))}
                 </div>
+
+                {settingsSection === 'location' && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2"><MapPin className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Your Location</h3></div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Home ZIP Code</label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={5}
+                        placeholder="e.g. 43214"
+                        value={settings.homeZip || ''}
+                        onChange={(e) => setSettings({...settings, homeZip: e.target.value.replace(/\D/g,'')})}
+                        className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-bold"
+                      />
+                      <p className="text-[10px] text-slate-400 leading-relaxed">Used to estimate driving distance from your home to each signing. More accurate fee calculations.</p>
+                    </div>
+                  </div>
+                )}
+
+                {settingsSection === 'mode' && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2"><Zap className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Mode</h3></div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${mode === 'Review' ? 'border-black bg-black text-white' : 'border-slate-100 bg-slate-50 text-slate-600'}`} onClick={() => setMode('Review')}>
+                        <p className="text-xs font-black mb-1">Review</p>
+                        <p className={`text-[10px] leading-relaxed ${mode === 'Review' ? 'text-white/70' : 'text-slate-400'}`}>You confirm every action manually. Recommended for most users.</p>
+                      </div>
+                      <div className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${mode === 'Auto' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-100 bg-slate-50 text-slate-600'}`} onClick={() => setMode('Auto')}>
+                        <p className="text-xs font-black mb-1">Auto-Accept</p>
+                        <p className={`text-[10px] leading-relaxed ${mode === 'Auto' ? 'text-emerald-600' : 'text-slate-400'}`}>Automatically logs ACCEPT when AI is HIGH confidence. You still manually Counter or Decline.</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {settingsSection === 'fees' && (
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2"><DollarSign className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Fee Structure</h3></div>
+                    <div className="grid grid-cols-2 gap-3">
+                      {[{label:'Base Fee ($)',key:'baseFee',step:'1'},{label:'Mileage ($/mi)',key:'mileageRate',step:'0.01'},{label:'After Hours',key:'afterHoursFee',step:'1'},{label:'Refinance +',key:'refinanceFee',step:'1'},{label:'Purchase +',key:'purchaseFee',step:'1'}].map(({label,key,step}) => (
+                        <div key={key} className="space-y-1.5">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">{label}</label>
+                          <input type="number" step={step} value={(settings as any)[key]} onChange={(e) => setSettings({...settings,[key]:Number(e.target.value)})} className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-bold" />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {settingsSection === 'overhead' && (
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2"><Calculator className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Overhead</h3></div>
+                    <div className="grid grid-cols-2 gap-3">
+                      {[{label:'IRS Mileage ($)',key:'irsMileageRate',step:'0.01'},{label:'Printing ($/pg)',key:'printingRate',step:'0.01'},{label:'Hourly Rate ($)',key:'hourlyRate',step:'1'},{label:'Scanback Fee ($)',key:'scanbackFee',step:'1'},{label:'Min Hourly Profit',key:'minHourlyNetProfit',step:'1'},{label:'Base Overhead',key:'baseOverhead',step:'1'}].map(({label,key,step}) => (
+                        <div key={key} className="space-y-1.5">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">{label}</label>
+                          <input type="number" step={step} value={(settings as any)[key]} onChange={(e) => setSettings({...settings,[key]:Number(e.target.value)})} className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-bold" />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {settingsSection === 'templates' && (
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2"><FileText className="w-4 h-4 text-slate-400" /><h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">Templates</h3></div>
+                    {[{label:'Accept',key:'ACCEPT',rows:2},{label:'Counter',key:'COUNTER',rows:3},{label:'Decline',key:'DECLINE',rows:2},{label:'Conditional Counter',key:'CONDITIONAL_COUNTER',rows:3},{label:'Rate Inquiry',key:'RATE_INQUIRY',rows:3}].map(({label,key,rows}) => (
+                      <div key={key} className="space-y-1.5">
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">{label}</label>
+                        <textarea value={(settings.templates as any)[key]||''} onChange={(e) => setSettings({...settings,templates:{...settings.templates,[key]:e.target.value}})} rows={rows} className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-black outline-none text-sm font-mono" />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="p-5 border-t border-slate-100 shrink-0">
-                <button onClick={() => saveSettings(settings)} className="w-full py-4 bg-black text-white rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-slate-800 transition-all active:scale-[0.98] flex items-center justify-center gap-2">
-                  <Save className="w-4 h-4" /> Save Settings
-                </button>
+                <div className="grid grid-cols-2 gap-3">
+                  <button onClick={resetSettings} className="w-full py-4 bg-slate-100 text-slate-700 rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-slate-200 transition-all active:scale-[0.98]">
+                    Reset Defaults
+                  </button>
+                  <button onClick={() => saveSettings(settings)} className="w-full py-4 bg-black text-white rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-slate-800 transition-all active:scale-[0.98] flex items-center justify-center gap-2">
+                    <Save className="w-4 h-4" /> Save Settings
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>
