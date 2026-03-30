@@ -501,6 +501,8 @@ export default function PricingAssistant() {
   const [jobFilter, setJobFilter] = useState<JobFilter>('ALL');
   const [jobSearch, setJobSearch] = useState('');
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('location');
+  const [undoJobsSnapshot, setUndoJobsSnapshot] = useState<AnalysisResult[] | null>(null);
+  const [undoLabel, setUndoLabel] = useState<string | null>(null);
 
   const activeJob = jobs.find(j => j.id === activeJobId) || null;
   const filteredJobs = jobs.filter((job) => {
@@ -519,6 +521,16 @@ export default function PricingAssistant() {
   });
   const [pendingSharedText, setPendingSharedText] = useState<string | null>(null);
   const pendingSettingsRef = React.useRef<PricingSettings>(DEFAULT_SETTINGS);
+  const undoTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pipelineStats = React.useMemo(() => {
+    const total = jobs.length;
+    const reviewed = jobs.filter(j => j.status === 'reviewed').length;
+    const completed = jobs.filter(j => j.status === 'completed').length;
+    const avgOffered = jobs
+      .filter(j => j.parsed_input.offered_fee != null)
+      .reduce((acc, j, _, arr) => acc + ((j.parsed_input.offered_fee || 0) / arr.length), 0);
+    return { total, reviewed, completed, avgOffered: Math.round(avgOffered) };
+  }, [jobs]);
 
   React.useEffect(() => {
     const sj = localStorage.getItem('notary_job_history');
@@ -555,6 +567,12 @@ export default function PricingAssistant() {
     }
   }, [mounted, pendingSharedText]);
 
+  React.useEffect(() => {
+    return () => {
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    };
+  }, []);
+
   const completeOnboarding = () => {
     localStorage.setItem('sigseal_onboarding_done', '1');
     setShowOnboarding(false);
@@ -574,6 +592,25 @@ export default function PricingAssistant() {
     const updated = jobs.map(j => j.id === id ? { ...j, notes } : j);
     setJobs(updated);
     localStorage.setItem('notary_job_history', JSON.stringify(updated));
+  };
+
+  const queueUndo = (snapshot: AnalysisResult[], label: string) => {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    setUndoJobsSnapshot(snapshot);
+    setUndoLabel(label);
+    undoTimerRef.current = setTimeout(() => {
+      setUndoJobsSnapshot(null);
+      setUndoLabel(null);
+    }, 6000);
+  };
+
+  const undoLastAction = () => {
+    if (!undoJobsSnapshot) return;
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    setJobs(undoJobsSnapshot);
+    localStorage.setItem('notary_job_history', JSON.stringify(undoJobsSnapshot));
+    setUndoJobsSnapshot(null);
+    setUndoLabel(null);
   };
 
   const handleAnalyzeText = async (text: string, settingsOverride?: PricingSettings) => {
@@ -717,6 +754,7 @@ export default function PricingAssistant() {
   };
 
   const removeFromHistory = (id: string) => {
+    queueUndo(jobs, 'Job removed');
     const newJobs = jobs.filter(j => j.id !== id);
     setJobs(newJobs);
     if (activeJobId === id) setActiveJobId(null);
@@ -757,7 +795,7 @@ export default function PricingAssistant() {
         <aside className={`absolute inset-0 z-20 bg-white border-r border-slate-200 flex flex-col transition-transform duration-300 lg:relative lg:translate-x-0 lg:w-72 xl:w-80 ${activeJobId ? '-translate-x-full lg:translate-x-0' : 'translate-x-0'}`}>
           <div className="p-3 border-b border-slate-100 flex items-center justify-between">
             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Jobs</span>
-            <button aria-label="Clear all jobs" title="Clear all jobs" onClick={() => { setJobs([]); localStorage.removeItem('notary_job_history'); }} className="p-1 hover:bg-rose-50 text-slate-300 hover:text-rose-500 rounded-lg transition-all">
+            <button aria-label="Clear all jobs" title="Clear all jobs" onClick={() => { queueUndo(jobs, 'All jobs cleared'); setJobs([]); localStorage.removeItem('notary_job_history'); }} className="p-1 hover:bg-rose-50 text-slate-300 hover:text-rose-500 rounded-lg transition-all">
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -795,6 +833,24 @@ export default function PricingAssistant() {
 
             {jobs.length > 0 && (
               <div className="space-y-2">
+                <div className="grid grid-cols-4 gap-1.5">
+                  <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Total</p>
+                    <p className="text-xs font-bold text-slate-700">{pipelineStats.total}</p>
+                  </div>
+                  <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Reviewed</p>
+                    <p className="text-xs font-bold text-slate-700">{pipelineStats.reviewed}</p>
+                  </div>
+                  <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Done</p>
+                    <p className="text-xs font-bold text-slate-700">{pipelineStats.completed}</p>
+                  </div>
+                  <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Avg Offer</p>
+                    <p className="text-xs font-bold text-slate-700">${pipelineStats.avgOffered || 0}</p>
+                  </div>
+                </div>
                 <input
                   value={jobSearch}
                   onChange={(e) => setJobSearch(e.target.value)}
@@ -833,6 +889,15 @@ export default function PricingAssistant() {
             {jobs.length > 0 && filteredJobs.length === 0 && (
               <div className="px-3 py-4 bg-slate-50 rounded-xl border border-slate-200 text-center">
                 <p className="text-xs font-bold text-slate-500">No jobs match this filter.</p>
+              </div>
+            )}
+
+            {undoJobsSnapshot && (
+              <div className="px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-2">
+                <p className="text-[11px] font-bold text-amber-800">{undoLabel}</p>
+                <button onClick={undoLastAction} className="px-2 py-1 rounded-lg bg-amber-500 text-white text-[10px] font-black uppercase tracking-wider">
+                  Undo
+                </button>
               </div>
             )}
 
