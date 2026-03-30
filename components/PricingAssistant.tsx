@@ -44,7 +44,7 @@ interface AnalysisResult {
   response_message: string;
   rate_inquiry_response: string | null;
   action_type: 'AUTO_SEND' | 'DRAFT' | 'REVIEW';
-  status: 'new' | 'reviewed' | 'completed';
+  status: 'new' | 'reviewed' | 'completed' | 'won' | 'lost';
   auditLoading: boolean;
   timestamp: number;
   notes?: string;
@@ -80,7 +80,7 @@ interface AnalysisResult {
 
 type AppMode = 'Review' | 'Auto';
 type ErrorAction = 'analyze' | 'notify';
-type JobFilter = 'ALL' | 'NEW' | 'REVIEWED' | 'COMPLETED' | 'URGENT';
+type JobFilter = 'ALL' | 'NEW' | 'REVIEWED' | 'COMPLETED' | 'WON' | 'LOST' | 'URGENT';
 type SettingsSection = 'location' | 'mode' | 'fees' | 'overhead' | 'templates';
 
 interface AppError {
@@ -511,6 +511,8 @@ export default function PricingAssistant() {
       jobFilter === 'NEW' ? job.status === 'new' :
       jobFilter === 'REVIEWED' ? job.status === 'reviewed' :
       jobFilter === 'COMPLETED' ? job.status === 'completed' :
+      jobFilter === 'WON' ? job.status === 'won' :
+      jobFilter === 'LOST' ? job.status === 'lost' :
       job.is_urgent;
     const needle = jobSearch.trim().toLowerCase();
     if (!needle) return matchesFilter;
@@ -526,10 +528,13 @@ export default function PricingAssistant() {
     const total = jobs.length;
     const reviewed = jobs.filter(j => j.status === 'reviewed').length;
     const completed = jobs.filter(j => j.status === 'completed').length;
+    const won = jobs.filter(j => j.status === 'won').length;
+    const lost = jobs.filter(j => j.status === 'lost').length;
     const avgOffered = jobs
       .filter(j => j.parsed_input.offered_fee != null)
       .reduce((acc, j, _, arr) => acc + ((j.parsed_input.offered_fee || 0) / arr.length), 0);
-    return { total, reviewed, completed, avgOffered: Math.round(avgOffered) };
+    const winRate = (won + lost) > 0 ? Math.round((won / (won + lost)) * 100) : 0;
+    return { total, reviewed, completed, won, lost, winRate, avgOffered: Math.round(avgOffered) };
   }, [jobs]);
 
   React.useEffect(() => {
@@ -747,6 +752,15 @@ export default function PricingAssistant() {
     finally { setIsNotifying(false); }
   };
 
+  const handleDecisionAction = (job: AnalysisResult, action: 'ACCEPT' | 'COUNTER' | 'DECLINE') => {
+    const isOverride = job.decision !== action && !(job.decision === 'CONDITIONAL_COUNTER' && action === 'COUNTER');
+    if (isOverride) {
+      const overrideLine = `Manual override: AI recommended ${job.decision}, user sent ${action} (${new Date().toLocaleString()}).`;
+      updateJobNotes(job.id, `${overrideLine}${job.notes ? `\n${job.notes}` : ''}`);
+    }
+    handleNotify({ ...job, decision: action });
+  };
+
   const copyReply = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopied(true);
@@ -833,7 +847,7 @@ export default function PricingAssistant() {
 
             {jobs.length > 0 && (
               <div className="space-y-2">
-                <div className="grid grid-cols-4 gap-1.5">
+                <div className="grid grid-cols-5 gap-1.5">
                   <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
                     <p className="text-[9px] font-black uppercase text-slate-400">Total</p>
                     <p className="text-xs font-bold text-slate-700">{pipelineStats.total}</p>
@@ -846,9 +860,13 @@ export default function PricingAssistant() {
                     <p className="text-[9px] font-black uppercase text-slate-400">Done</p>
                     <p className="text-xs font-bold text-slate-700">{pipelineStats.completed}</p>
                   </div>
+                  <div className="p-2 bg-emerald-50 border border-emerald-200 rounded-lg">
+                    <p className="text-[9px] font-black uppercase text-emerald-600">Won</p>
+                    <p className="text-xs font-bold text-emerald-700">{pipelineStats.won}</p>
+                  </div>
                   <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
-                    <p className="text-[9px] font-black uppercase text-slate-400">Avg Offer</p>
-                    <p className="text-xs font-bold text-slate-700">${pipelineStats.avgOffered || 0}</p>
+                    <p className="text-[9px] font-black uppercase text-slate-400">Win Rate</p>
+                    <p className="text-xs font-bold text-slate-700">{pipelineStats.winRate}%</p>
                   </div>
                 </div>
                 <input
@@ -863,6 +881,8 @@ export default function PricingAssistant() {
                     ['NEW', 'New'],
                     ['REVIEWED', 'Reviewed'],
                     ['COMPLETED', 'Done'],
+                    ['WON', 'Won'],
+                    ['LOST', 'Lost'],
                     ['URGENT', 'Urgent'],
                   ] as const).map(([value, label]) => (
                     <button
@@ -914,7 +934,7 @@ export default function PricingAssistant() {
 
                   <div className="flex items-center justify-between mb-2 pl-1">
                     <div className="flex items-center gap-2">
-                      <div className={`w-1.5 h-1.5 rounded-full ${job.status === 'new' ? 'bg-rose-500 animate-pulse' : job.status === 'reviewed' ? 'bg-amber-400' : 'bg-slate-300'}`} />
+                      <div className={`w-1.5 h-1.5 rounded-full ${job.status === 'new' ? 'bg-rose-500 animate-pulse' : job.status === 'reviewed' ? 'bg-amber-400' : job.status === 'won' ? 'bg-emerald-500' : job.status === 'lost' ? 'bg-rose-400' : 'bg-slate-300'}`} />
                       <span className={`text-[10px] font-black uppercase tracking-wider ${isActive ? 'text-white/50' : 'text-slate-400'}`}>
                         {job.decision === 'RATE_QUOTE' ? 'Rate Inquiry' : job.parsed_input.document_type}
                       </span>
@@ -1021,7 +1041,7 @@ export default function PricingAssistant() {
                         const isRec = (activeJob.decision === action || (action === 'COUNTER' && activeJob.decision === 'CONDITIONAL_COUNTER'));
                         return (
                           <button key={action}
-                            onClick={() => handleNotify({ ...activeJob, decision: action })}
+                            onClick={() => handleDecisionAction(activeJob, action)}
                             disabled={isNotifying || activeJob.status === 'completed'}
                             className={`flex flex-col items-center gap-1.5 py-4 rounded-2xl font-black text-xs uppercase tracking-wider transition-all disabled:opacity-50 active:scale-[0.97] ${
                               isRec
@@ -1054,6 +1074,21 @@ export default function PricingAssistant() {
                       <Check className="w-4 h-4" /> Logged
                     </motion.div>
                   )}
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => updateJobStatus(activeJob.id, 'won')}
+                      className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider border-2 transition-colors ${activeJob.status === 'won' ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-white border-emerald-200 text-emerald-700 hover:bg-emerald-50'}`}
+                    >
+                      Mark Won
+                    </button>
+                    <button
+                      onClick={() => updateJobStatus(activeJob.id, 'lost')}
+                      className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider border-2 transition-colors ${activeJob.status === 'lost' ? 'bg-rose-500 border-rose-500 text-white' : 'bg-white border-rose-200 text-rose-700 hover:bg-rose-50'}`}
+                    >
+                      Mark Lost
+                    </button>
+                  </div>
 
                   {/* ── SECTION 4: OFFER AUDIT — collapsed by default ── */}
                   <CollapsibleAuditPanel
